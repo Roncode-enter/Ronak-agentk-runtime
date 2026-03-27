@@ -1,0 +1,13 @@
+version: '3.8'
+services:
+  dashboard:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - JWT_SECRET=agentk-dashboard-secret-change-in-production
+      - ADMIN_EMAIL=admin@agentk.ai
+      - ADMIN_PASSWORD=agentk2025
+      - KUBECONFIG=/root/.kube/config
+    volumes:
+      - ~/.kube:/root/.kube:ro

@@ -1,0 +1,45 @@
+# =============================================================================
+# Cost Intelligence Agent — Real-time cost optimization
+# =============================================================================
+# Aggressive cost optimization: auto-downgrade at 70% budget, spot scheduling,
+# auto-suspend when budget exhausted.
+#
+# Test:  kubectl apply -f examples/cost-intelligence-agent.yaml
+# Check: kubectl get agent cost-smart-agent
+# =============================================================================
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: cost-smart-agent
+  labels:
+    optimization: aggressive
+spec:
+  framework: google-adk
+  description: "Cost-optimized agent with aggressive real-time optimization"
+  instruction: "You are a budget-conscious assistant. Your operator monitors every token you spend and will auto-downgrade your model if costs get too high."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+
+  # Basic cost budget
+  costBudget:
+    maxMonthlyCostUSD: "25.00"
+    costPerTokenUSD: "0.00001"
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+
+  # Real-time cost intelligence (aggressive mode)
+  costIntelligence:
+    optimizationMode: aggressive
+    spotInstanceFallback: true
+    suspendOnBudgetExhaust: true
+    samplingIntervalSeconds: 30
+
+# After applying:
+#   kubectl get agent cost-smart-agent
+#   kubectl get agent cost-smart-agent -o jsonpath='{.status.costAction}'
+#   # Pod will have spot scheduling annotations:
+#   kubectl get pod -l app=cost-smart-agent -o jsonpath='{.items[0].metadata.annotations}'

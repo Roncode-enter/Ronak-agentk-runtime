@@ -14,6 +14,11 @@ resources:
 - bases/runtime.agentic-layer.ai_toolgatewayclasses.yaml
 - bases/runtime.agentic-layer.ai_toolgateways.yaml
 - bases/runtime.agentic-layer.ai_toolservers.yaml
+- bases/runtime.agentic-layer.ai_toolsandboxes.yaml
+- bases/runtime.agentic-layer.ai_policies.yaml
+- bases/runtime.agentic-layer.ai_simulationpreviews.yaml
+- bases/runtime.agentic-layer.ai_swarms.yaml
+- bases/runtime.agentic-layer.ai_confidentialagents.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:

@@ -1,0 +1,50 @@
+# =============================================================================
+# Confidential Agent — Hardware-rooted TEE execution
+# =============================================================================
+# Deploys an agent inside Kata Confidential Containers with Intel TDX.
+# Even the cloud provider cannot see inside the enclave.
+#
+# Test:  kubectl apply -f examples/confidential-agent.yaml
+# Check: kubectl get confidentialagent tee-analyst
+# =============================================================================
+
+# First, create the base Agent
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: analyst-agent
+spec:
+  framework: google-adk
+  description: "Financial analyst agent for confidential execution"
+  instruction: "You are a financial analyst handling sensitive data. All your execution happens inside a hardware-encrypted enclave."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  verifiable:
+    enabled: true
+    proofMode: snark-groth16
+
+---
+
+# Wrap it in a Confidential Agent (TEE)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ConfidentialAgent
+metadata:
+  name: tee-analyst
+spec:
+  agentRef:
+    name: analyst-agent
+  teeProvider: intel-tdx
+  runtimeClassName: kata-cc
+  memoryEncryption: true
+  enclaveMemoryMB: 512
+  attestationIntervalSeconds: 60
+
+# After applying:
+#   kubectl get confidentialagent tee-analyst
+#     TEE PROVIDER   VERIFIED   AGENT           LAST ATTESTATION
+#     intel-tdx      true       analyst-agent   2026-03-25T...

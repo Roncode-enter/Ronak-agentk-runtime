@@ -1,0 +1,11 @@
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: hello-agentk
+spec:
+  framework: google-adk
+  image: ghcr.io/agentic-layer/mock-agent:0.6.2
+  description: "Hello from AgentK"
+  protocols:
+    - type: A2A
+  replicas: 1

@@ -98,4 +98,49 @@ resources:
   kind: GuardrailProvider
   path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
   version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: agentic-layer.ai
+  group: runtime
+  kind: ToolSandbox
+  path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: agentic-layer.ai
+  group: runtime
+  kind: Policy
+  path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: agentic-layer.ai
+  group: runtime
+  kind: SimulationPreview
+  path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: agentic-layer.ai
+  group: runtime
+  kind: Swarm
+  path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
+  version: v1alpha1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: agentic-layer.ai
+  group: runtime
+  kind: ConfidentialAgent
+  path: github.com/agentic-layer/agent-runtime-operator/api/v1alpha1
+  version: v1alpha1
 version: "3"

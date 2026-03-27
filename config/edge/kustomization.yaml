@@ -1,0 +1,17 @@
+# Edge/k3s deployment profile for the Agent Runtime Operator.
+# This overlay reduces resource footprint for constrained environments.
+#
+# Usage:
+#   kustomize build config/edge | kubectl apply -f -
+#
+# For k3s without cert-manager, add ENABLE_WEBHOOKS=false to the manager env:
+#   Add to patches/manager-resources.yaml:
+#     env:
+#       - name: ENABLE_WEBHOOKS
+#         value: "false"
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../default
+patches:
+  - path: patches/manager-resources.yaml

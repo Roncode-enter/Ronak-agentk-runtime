@@ -1,0 +1,58 @@
+# =============================================================================
+# SimulationPreview — Dry-run preview with cost prediction
+# =============================================================================
+# This creates a "what-if" preview of an Agent deployment WITHOUT actually
+# deploying it. The operator generates the full Deployment YAML, estimates
+# monthly cost, counts containers (including sidecars), and reports warnings.
+#
+# Usage:
+#   kubectl apply -f examples/simulation-preview.yaml
+#   kubectl get simulationpreview preview-my-agent
+#   kubectl describe simulationpreview preview-my-agent
+# =============================================================================
+
+# First, create the Agent we want to preview
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: preview-target-agent
+spec:
+  framework: google-adk
+  description: "Agent used as a simulation preview target"
+  instruction: "You are a financial advisor agent. Analyze market data and provide investment recommendations."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 3
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  costBudget:
+    maxMonthlyCostUSD: "50.00"
+    costPerTokenUSD: "0.00001"
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+
+---
+
+# Now create the SimulationPreview — this does NOT create any pods
+# It only generates a preview of what WOULD be created
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: SimulationPreview
+metadata:
+  name: preview-my-agent
+spec:
+  # Reference the agent we want to preview
+  agentRef:
+    name: preview-target-agent
+  # dryRun is always true — this is a preview only
+  dryRun: true
+
+# After applying, check the status:
+#   kubectl get simulationpreview preview-my-agent
+#
+# You'll see columns:
+#   AGENT                  READY   CONTAINERS   EST. COST
+#   preview-target-agent   True    1            $50.00/month
+#
+# The status.previewDeployment field contains the full YAML of
+# what the Deployment would look like, including all sidecars.

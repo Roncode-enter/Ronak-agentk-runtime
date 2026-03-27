@@ -101,6 +101,145 @@ type AgentTool struct {
 	PropagatedHeaders []string `json:"propagatedHeaders,omitempty"`
 }
 
+// CostBudgetSpec defines cost budget configuration for predictive cost management.
+// When configured, the operator projects monthly cost from token usage and can
+// automatically downgrade the model or pause the agent to stay within budget.
+type CostBudgetSpec struct {
+	// MaxMonthlyCostUSD is the maximum monthly cost threshold in USD (e.g., "50.00").
+	// When predicted cost exceeds this, the operator takes action (downgrade or pause).
+	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
+	MaxMonthlyCostUSD string `json:"maxMonthlyCostUSD"`
+
+	// DowngradeModel is the cheaper model to switch to if predicted cost exceeds the budget.
+	// If not set and budget is exceeded, the agent will be paused instead.
+	// +optional
+	DowngradeModel string `json:"downgradeModel,omitempty"`
+
+	// CostPerTokenUSD is the cost per token in USD (e.g., "0.00001").
+	// Used to calculate predicted monthly cost from token usage rate.
+	// +kubebuilder:validation:Pattern=`^\d+(\.\d+)?$`
+	CostPerTokenUSD string `json:"costPerTokenUSD"`
+}
+
+// CostIntelligenceSpec configures real-time cost optimization beyond basic CostBudget.
+// It adds optimization modes, spot-instance scheduling hints, and budget-exhaust suspension.
+type CostIntelligenceSpec struct {
+	// OptimizationMode controls how aggressively the optimizer acts on cost predictions.
+	// conservative: downgrade at 90% of budget, aggressive: at 70%, auto: at 80%.
+	// +kubebuilder:validation:Enum=conservative;aggressive;auto
+	// +kubebuilder:default="conservative"
+	OptimizationMode string `json:"optimizationMode,omitempty"`
+
+	// SpotInstanceFallback adds scheduler annotations for spot/preemptible node scheduling.
+	// +optional
+	SpotInstanceFallback bool `json:"spotInstanceFallback,omitempty"`
+
+	// SuspendOnBudgetExhaust scales replicas to 0 when the budget is fully exhausted.
+	// +optional
+	SuspendOnBudgetExhaust bool `json:"suspendOnBudgetExhaust,omitempty"`
+
+	// SamplingIntervalSeconds controls how often cost is re-evaluated during reconcile.
+	// +optional
+	// +kubebuilder:default=60
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=3600
+	SamplingIntervalSeconds int32 `json:"samplingIntervalSeconds,omitempty"`
+}
+
+// VerifiableSpec configures verifiable execution with cryptographic proof chains.
+// Proof chains build on the existing Merkle checkpoint system with additional attestation.
+type VerifiableSpec struct {
+	// Enabled turns on verifiable execution proof generation.
+	// +kubebuilder:default=false
+	Enabled bool `json:"enabled,omitempty"`
+
+	// ProofMode selects the proof algorithm.
+	// merkle-only: SHA-256 Merkle chain (free tier),
+	// sha3-attestation: SHA-256 proof chain + signed attestation (legacy),
+	// full-zk: alias for snark-groth16 (legacy),
+	// snark-groth16: real Groth16 zk-SNARK proof via gnark (standard tier),
+	// plonk-universal: PlonK universal SNARK via gnark (premium tier).
+	// +kubebuilder:validation:Enum=merkle-only;sha3-attestation;full-zk;snark-groth16;plonk-universal
+	// +kubebuilder:default="merkle-only"
+	ProofMode string `json:"proofMode,omitempty"`
+
+	// AttestationSignerSecret references a Kubernetes Secret containing a signing key for attestation reports.
+	// The Secret should have a key named "signing-key".
+	// +optional
+	AttestationSignerSecret string `json:"attestationSignerSecret,omitempty"`
+
+	// ProofRetentionDays controls how long proof data is retained in status annotations.
+	// +optional
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=365
+	ProofRetentionDays int32 `json:"proofRetentionDays,omitempty"`
+}
+
+// GovernanceSpec configures the centralized governance layer with autonomy tiers
+// and human-in-loop approval gates.
+type GovernanceSpec struct {
+	// AutonomyLevel defines the agent's autonomy tier from 1 (human approves everything)
+	// to 5 (fully autonomous). Levels 1-2 require human approval, 3 requires policy compliance,
+	// 4-5 are advisory only.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=5
+	// +kubebuilder:default=3
+	AutonomyLevel int32 `json:"autonomyLevel,omitempty"`
+
+	// HumanApprovalWebhook is the URL called for human-in-loop approval at low autonomy levels (1-2).
+	// +optional
+	// +kubebuilder:validation:Format=uri
+	HumanApprovalWebhook string `json:"humanApprovalWebhook,omitempty"`
+
+	// RequirePolicyCompliance ensures all referenced policies must pass before deployment proceeds.
+	// +optional
+	// +kubebuilder:default=true
+	RequirePolicyCompliance bool `json:"requirePolicyCompliance,omitempty"`
+}
+
+// LifecycleSpec configures Kubernetes-style lifecycle control for the agent,
+// including deployment strategies, prompt versioning, and graceful shutdown.
+type LifecycleSpec struct {
+	// Strategy controls how updates are rolled out.
+	// rolling: standard rolling update, canary: maxSurge=1/maxUnavailable=0, blue-green: recreate.
+	// +kubebuilder:validation:Enum=rolling;canary;blue-green
+	// +kubebuilder:default="rolling"
+	Strategy string `json:"strategy,omitempty"`
+
+	// PromptVersion is an opaque version tag for tracking prompt/instruction changes.
+	// Changes to this field trigger a new rollout and Merkle checkpoint.
+	// +optional
+	PromptVersion string `json:"promptVersion,omitempty"`
+
+	// CheckpointOnUpdate forces a Merkle checkpoint before applying any spec change.
+	// +optional
+	// +kubebuilder:default=true
+	CheckpointOnUpdate bool `json:"checkpointOnUpdate,omitempty"`
+
+	// GracefulShutdownSeconds is the termination grace period for the agent pod.
+	// +optional
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=600
+	GracefulShutdownSeconds int32 `json:"gracefulShutdownSeconds,omitempty"`
+
+	// SelfHealing enables automatic restart on failure via liveness probe.
+	// +optional
+	// +kubebuilder:default=true
+	SelfHealing bool `json:"selfHealing,omitempty"`
+
+	// MaxSurge for rolling/canary updates (percentage string like "25%" or absolute like "1").
+	// +optional
+	// +kubebuilder:default="25%"
+	MaxSurge string `json:"maxSurge,omitempty"`
+
+	// MaxUnavailable for rolling updates (percentage string like "25%" or absolute like "0").
+	// +optional
+	// +kubebuilder:default="25%"
+	MaxUnavailable string `json:"maxUnavailable,omitempty"`
+}
+
 // AgentSpec defines the desired state of Agent.
 type AgentSpec struct {
 	// Framework defines the supported agent frameworks
@@ -183,6 +322,40 @@ type AgentSpec struct {
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 
+	// ToolSandboxRef references a ToolSandbox for WASM-based secure tool execution.
+	// When set, the operator injects a WasmEdge sidecar container into the agent pod.
+	// If Namespace is not specified, defaults to the same namespace as the Agent.
+	// +optional
+	ToolSandboxRef *corev1.ObjectReference `json:"toolSandboxRef,omitempty"`
+
+	// PolicyRefs references Policy resources to enforce on this agent.
+	// When set, the operator injects eBPF/OPA enforcement sidecars into the agent pod.
+	// +optional
+	PolicyRefs []corev1.ObjectReference `json:"policyRefs,omitempty"`
+
+	// CostBudget defines optional cost budget configuration for predictive cost management.
+	// When set, the operator monitors token usage and predicts monthly cost.
+	// If predicted cost exceeds the budget, the operator can downgrade the model or pause the agent.
+	// +optional
+	CostBudget *CostBudgetSpec `json:"costBudget,omitempty"`
+
+	// CostIntelligence configures real-time cost optimization beyond basic CostBudget.
+	// Adds optimization modes (conservative/aggressive/auto), spot-instance hints, and budget-exhaust suspension.
+	// +optional
+	CostIntelligence *CostIntelligenceSpec `json:"costIntelligence,omitempty"`
+
+	// Verifiable configures verifiable execution with cryptographic proof chains and attestation reports.
+	// +optional
+	Verifiable *VerifiableSpec `json:"verifiable,omitempty"`
+
+	// Governance configures the centralized governance layer with autonomy tiers and human-in-loop gates.
+	// +optional
+	Governance *GovernanceSpec `json:"governance,omitempty"`
+
+	// Lifecycle configures Kubernetes-style lifecycle control (rolling, canary, blue-green, checkpoint).
+	// +optional
+	Lifecycle *LifecycleSpec `json:"lifecycle,omitempty"`
+
 	// CommonMetadata defines labels and annotations to be applied to the Deployment and Service
 	// resources created for this agent, as well as the pod template.
 	// +optional
@@ -209,11 +382,66 @@ type AgentStatus struct {
 	// If nil, the agent is not connected to any AI Gateway.
 	// +optional
 	AiGatewayRef *corev1.ObjectReference `json:"aiGatewayRef,omitempty"`
+
+	// MerkleRoot is the current Merkle root hash of all reconciliation checkpoints.
+	// This provides an immutable audit trail — if any checkpoint is tampered with, the root won't match.
+	// Automatically populated by the controller on every reconciliation.
+	// +optional
+	MerkleRoot string `json:"merkleRoot,omitempty"`
+
+	// CheckpointCount tracks the total number of reconciliation checkpoints created.
+	// +optional
+	CheckpointCount int32 `json:"checkpointCount,omitempty"`
+
+	// LastCheckpointTime is the timestamp of the most recent reconciliation checkpoint.
+	// +optional
+	LastCheckpointTime *metav1.Time `json:"lastCheckpointTime,omitempty"`
+
+	// PredictedMonthlyCostUSD is the estimated monthly cost in USD based on current token usage rate.
+	// Only populated when CostBudget is configured on the agent spec.
+	// +optional
+	PredictedMonthlyCostUSD string `json:"predictedMonthlyCostUSD,omitempty"`
+
+	// CostAction indicates what action was taken based on cost prediction.
+	// Possible values: "none" (within budget), "downgraded" (switched to cheaper model), "paused" (over budget, no downgrade available).
+	// +optional
+	CostAction string `json:"costAction,omitempty"`
+
+	// TokensUsed tracks the total tokens consumed by this agent.
+	// This field is intended to be updated by external metrics systems (e.g., Prometheus, agent runtime).
+	// The controller reads this value to project costs but does not write it.
+	// +optional
+	TokensUsed int64 `json:"tokensUsed,omitempty"`
+
+	// ZKProofRoot is the root hash of the verifiable proof chain (SHA-256, zk-SNARK ready).
+	// Populated when spec.verifiable.enabled is true.
+	// +optional
+	ZKProofRoot string `json:"zkProofRoot,omitempty"`
+
+	// AttestationDigest is the latest signed attestation report hash.
+	// Provides a tamper-proof digest that can be verified externally.
+	// +optional
+	AttestationDigest string `json:"attestationDigest,omitempty"`
+
+	// GovernanceStatus shows the current governance compliance state.
+	// Possible values: "compliant", "pending-approval", "non-compliant".
+	// +optional
+	GovernanceStatus string `json:"governanceStatus,omitempty"`
+
+	// LifecyclePhase shows the current lifecycle phase of the agent.
+	// Possible values: "stable", "updating", "suspended".
+	// +optional
+	LifecyclePhase string `json:"lifecyclePhase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="AI Gateway",type=string,JSONPath=".status.aiGatewayRef.name"
+// +kubebuilder:printcolumn:name="Merkle Root",type=string,JSONPath=".status.merkleRoot",priority=1
+// +kubebuilder:printcolumn:name="Cost",type=string,JSONPath=".status.predictedMonthlyCostUSD"
+// +kubebuilder:printcolumn:name="Cost Action",type=string,JSONPath=".status.costAction"
+// +kubebuilder:printcolumn:name="Governance",type=string,JSONPath=".status.governanceStatus",priority=1
+// +kubebuilder:printcolumn:name="Lifecycle",type=string,JSONPath=".status.lifecyclePhase",priority=1
 
 // Agent is the Schema for the agents API.
 type Agent struct {

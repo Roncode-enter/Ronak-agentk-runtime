@@ -1,0 +1,21 @@
+# ToolSandbox: Basic WasmEdge sandbox for secure tool execution
+#
+# This creates a WASM sandbox that runs tools in an isolated WasmEdge container.
+# The sandbox can only reach the hosts listed in allowedHosts.
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ToolSandbox
+metadata:
+  name: code-sandbox
+spec:
+  runtime: wasmedge
+  image: ghcr.io/agentic-layer/wasm-tools:latest
+  memoryLimitMB: 128
+  timeoutSeconds: 60
+  port: 8080
+  replicas: 1
+  allowedHosts:
+    - "api.github.com"
+    - "pypi.org"
+  env:
+    - name: LOGLEVEL
+      value: "INFO"

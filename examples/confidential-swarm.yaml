@@ -1,0 +1,109 @@
+# =============================================================================
+# Confidential Swarm — Multi-agent coordination inside TEE
+# =============================================================================
+# Two agents, each wrapped in a ConfidentialAgent (TEE), coordinated by a Swarm.
+# The entire multi-agent system runs inside hardware-encrypted enclaves.
+#
+# Test:  kubectl apply -f examples/confidential-swarm.yaml
+# Check: kubectl get confidentialagent && kubectl get swarm
+# =============================================================================
+
+# Agent 1: Data Processor
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: secure-processor
+spec:
+  framework: google-adk
+  description: "Secure data processor running in TEE"
+  instruction: "You process sensitive financial data inside a hardware-encrypted enclave."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  verifiable:
+    enabled: true
+    proofMode: full-zk
+
+---
+
+# Agent 2: Secure Analyst
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: secure-analyst
+spec:
+  framework: google-adk
+  description: "Secure analyst running in TEE"
+  instruction: "You analyze processed data and produce reports, all inside a hardware-encrypted enclave."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  verifiable:
+    enabled: true
+    proofMode: full-zk
+
+---
+
+# Wrap Agent 1 in TEE (AMD SEV-SNP)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ConfidentialAgent
+metadata:
+  name: tee-processor
+spec:
+  agentRef:
+    name: secure-processor
+  teeProvider: amd-sev-snp
+  memoryEncryption: true
+  enclaveMemoryMB: 512
+
+---
+
+# Wrap Agent 2 in TEE (AMD SEV-SNP)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ConfidentialAgent
+metadata:
+  name: tee-analyst
+spec:
+  agentRef:
+    name: secure-analyst
+  teeProvider: amd-sev-snp
+  memoryEncryption: true
+  enclaveMemoryMB: 512
+
+---
+
+# Swarm: Chain strategy — processor → analyst
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Swarm
+metadata:
+  name: confidential-swarm
+spec:
+  strategy: chain
+  timeoutSeconds: 120
+  agents:
+    - name: processor
+      agentRef:
+        name: secure-processor
+      role: leader
+    - name: analyst
+      agentRef:
+        name: secure-analyst
+      role: worker
+
+# After applying:
+#   kubectl get confidentialagent
+#     NAME             TEE PROVIDER   VERIFIED   AGENT
+#     tee-processor    amd-sev-snp    true       secure-processor
+#     tee-analyst      amd-sev-snp    true       secure-analyst
+#
+#   kubectl get swarm confidential-swarm
+#     STRATEGY   READY   TOTAL
+#     chain      2       2

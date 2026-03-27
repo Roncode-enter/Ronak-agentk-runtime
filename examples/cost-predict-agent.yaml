@@ -1,0 +1,28 @@
+# Cost-Predict Agent Example
+# This agent has a cost budget configured. The operator monitors token usage,
+# projects monthly cost, and can auto-downgrade to a cheaper model if budget exceeded.
+# Check status with: kubectl get agent cost-aware-assistant
+# Look for the "Cost" and "Cost Action" columns.
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: cost-aware-assistant
+spec:
+  framework: google-adk
+  description: "A cost-aware agent that auto-downgrades to a cheaper model when budget is exceeded"
+  instruction: "You are a helpful assistant. Your operator monitors your token usage and can switch you to a cheaper model if needed."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+  costBudget:
+    # Maximum monthly spend allowed in USD
+    maxMonthlyCostUSD: "50.00"
+    # Cheaper model to switch to if budget exceeded
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+    # Cost per token in USD (used for projection)
+    costPerTokenUSD: "0.00001"
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"

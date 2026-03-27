@@ -1,0 +1,45 @@
+# Policy: Spend Limit via OPA
+#
+# This policy uses Open Policy Agent (OPA) to enforce cost limits.
+# It evaluates each LLM API call against a Rego policy that checks
+# whether the agent has exceeded its budget.
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: spend-limit
+spec:
+  type: opa
+  enforcement: enforcing
+  description: "Enforces per-agent spend limits using OPA Rego policies"
+  rules:
+    - name: max-daily-spend
+      action: block
+      opa:
+        rego: |
+          package agentk.cost
+
+          default allow := true
+
+          # Block if daily spend exceeds $10
+          deny[msg] {
+            input.daily_spend_usd > 10.0
+            msg := sprintf("Daily spend limit exceeded: $%.2f > $10.00", [input.daily_spend_usd])
+          }
+
+          # Block if single request cost exceeds $1
+          deny[msg] {
+            input.request_cost_usd > 1.0
+            msg := sprintf("Single request cost too high: $%.2f > $1.00", [input.request_cost_usd])
+          }
+    - name: max-tokens-per-request
+      action: audit
+      opa:
+        rego: |
+          package agentk.tokens
+
+          default allow := true
+
+          warn[msg] {
+            input.total_tokens > 100000
+            msg := sprintf("High token usage: %d tokens in single request", [input.total_tokens])
+          }

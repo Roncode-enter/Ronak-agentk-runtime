@@ -1,0 +1,53 @@
+# A2A Chain Swarm: Sequential Pipeline with Leader/Worker/Aggregator
+# Requests flow through agents in order: intake → processor → summarizer.
+# Uses A2A protocol for agent-to-agent communication.
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: intake-agent
+spec:
+  framework: google-adk
+  description: "Intake agent that receives and classifies incoming requests"
+  instruction: "You are the intake agent. Classify the user's request into categories: question, task, or feedback. Pass the classified request to the next agent."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: processor-agent
+spec:
+  framework: google-adk
+  description: "Processing agent that handles classified requests"
+  instruction: "You are the processor agent. Take the classified request and produce a detailed response. Be thorough and accurate."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Swarm
+metadata:
+  name: pipeline-swarm
+spec:
+  # chain: requests flow sequentially through agents in order
+  strategy: chain
+  timeoutSeconds: 120
+  agents:
+    - name: intake
+      agentRef:
+        name: intake-agent
+      role: leader
+    - name: processor
+      agentRef:
+        name: processor-agent
+      role: worker
+    # Remote agent outside the cluster — just needs a URL
+    - name: external-summarizer
+      url: "https://agents.example.com/summarizer/.well-known/agent-card.json"
+      role: aggregator

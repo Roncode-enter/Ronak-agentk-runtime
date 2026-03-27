@@ -1,0 +1,20 @@
+# Verifiable Agent Example
+# This agent automatically gets Merkle-tree checkpoints on every reconciliation.
+# Check status with: kubectl describe agent verifiable-assistant
+# The merkleRoot, checkpointCount, and lastCheckpointTime fields are auto-populated.
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: verifiable-assistant
+spec:
+  framework: google-adk
+  description: "An agent with verifiable execution — every reconciliation is signed with a Merkle checkpoint"
+  instruction: "You are a helpful assistant. Your execution is verifiable via Merkle-tree checkpoints."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"

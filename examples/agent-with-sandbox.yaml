@@ -1,0 +1,67 @@
+# Agent with ToolSandbox + Policy references
+#
+# This agent demonstrates the full security stack:
+# 1. Tools run inside a WASM sandbox (ToolSandboxRef)
+# 2. Network + cost policies enforced via eBPF + OPA (PolicyRefs)
+#
+# The operator automatically injects sidecar containers:
+# - WasmEdge sidecar for sandboxed tool execution
+# - OPA sidecar for policy evaluation
+# - eBPF init container for kernel-level network filtering
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ToolSandbox
+metadata:
+  name: secure-sandbox
+spec:
+  runtime: wasmedge
+  image: ghcr.io/agentic-layer/wasm-tools:latest
+  memoryLimitMB: 256
+  timeoutSeconds: 120
+  port: 8080
+  allowedHosts:
+    - "api.github.com"
+
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: agent-security
+spec:
+  type: hybrid
+  enforcement: enforcing
+  description: "Security policy for the coding assistant agent"
+  rules:
+    - name: network-lockdown
+      action: block
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"
+    - name: cost-guard
+      action: block
+      opa:
+        rego: |
+          package agentk.cost
+          default allow := true
+          deny[msg] {
+            input.daily_spend_usd > 50.0
+            msg := "Daily spend limit of $50 exceeded"
+          }
+
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: secure-coding-assistant
+spec:
+  framework: google-adk
+  image: ghcr.io/agentic-layer/mock-agent:0.6.2
+  description: "A coding assistant with WASM sandbox and eBPF+OPA policies"
+  protocols:
+    - type: A2A
+  replicas: 1
+  toolSandboxRef:
+    name: secure-sandbox
+  policyRefs:
+    - name: agent-security

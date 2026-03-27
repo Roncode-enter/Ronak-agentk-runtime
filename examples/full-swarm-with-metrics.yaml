@@ -1,0 +1,146 @@
+# =============================================================================
+# Full Swarm with Prometheus Metrics Integration
+# =============================================================================
+# This example deploys a 3-agent fan-out swarm with Prometheus annotations
+# on all pods for automatic metrics scraping. The operator tracks:
+#   - agentk_swarm_ready_agents (how many agents are reachable)
+#   - agentk_swarm_total_agents (total agents in the swarm)
+#   - agentk_swarm_reconcile_total (reconciliation success/failure counts)
+#   - agentk_agent_reconcile_duration_seconds (per-agent reconcile time)
+#
+# Usage:
+#   kubectl apply -f examples/full-swarm-with-metrics.yaml
+#   kubectl get swarm research-swarm
+#   kubectl get agents
+# =============================================================================
+
+# Agent 1: Research Analyst — finds and summarizes information
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: research-analyst
+  labels:
+    team: research
+    metrics: enabled
+spec:
+  framework: google-adk
+  description: "Research analyst that finds and summarizes academic papers"
+  instruction: "You are a research analyst. When given a topic, search for relevant information, analyze findings, and provide a structured summary with key insights."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  commonMetadata:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: "/metrics"
+
+---
+
+# Agent 2: Data Validator — checks facts and sources
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: data-validator
+  labels:
+    team: research
+    metrics: enabled
+spec:
+  framework: google-adk
+  description: "Data validator that fact-checks research findings"
+  instruction: "You are a data validation agent. When given research findings, verify the claims, check for logical consistency, and flag any unsupported assertions."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  commonMetadata:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: "/metrics"
+
+---
+
+# Agent 3: Report Writer — creates final formatted output
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: report-writer
+  labels:
+    team: research
+    metrics: enabled
+spec:
+  framework: google-adk
+  description: "Report writer that creates polished research reports"
+  instruction: "You are a report writing agent. Take validated research findings and produce a well-structured, professional report with executive summary, methodology, findings, and recommendations."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  commonMetadata:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8000"
+      prometheus.io/path: "/metrics"
+
+---
+
+# Swarm: Fan-out strategy sends every request to ALL 3 agents in parallel
+# The coordinator collects all responses and aggregates them
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Swarm
+metadata:
+  name: research-swarm
+  labels:
+    team: research
+    metrics: enabled
+spec:
+  strategy: fan-out
+  maxConcurrency: 3
+  timeoutSeconds: 120
+  agents:
+    - name: analyst
+      agentRef:
+        name: research-analyst
+      role: worker
+    - name: validator
+      agentRef:
+        name: data-validator
+      role: worker
+    - name: writer
+      agentRef:
+        name: report-writer
+      role: aggregator
+  commonMetadata:
+    annotations:
+      prometheus.io/scrape: "true"
+      prometheus.io/port: "8080"
+    labels:
+      team: research
+      metrics: enabled
+
+# After applying, verify:
+#   kubectl get swarm research-swarm
+#     STRATEGY   READY   TOTAL
+#     fan-out    3       3
+#
+#   kubectl get agents -l team=research
+#     NAME                FRAMEWORK    READY   REPLICAS
+#     research-analyst    google-adk   True    1
+#     data-validator      google-adk   True    1
+#     report-writer       google-adk   True    1
+#
+# Prometheus metrics exposed at operator /metrics endpoint:
+#   agentk_swarm_ready_agents{name="research-swarm",strategy="fan-out"} 3
+#   agentk_swarm_total_agents{name="research-swarm",strategy="fan-out"} 3
+#   agentk_agent_ready{name="research-analyst",framework="google-adk"} 1

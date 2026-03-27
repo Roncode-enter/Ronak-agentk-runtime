@@ -1,0 +1,74 @@
+# Full-Featured Agent Example
+# Combines all features: WASM sandbox, Policy enforcement, cost budget, and Merkle checkpoints.
+# This demonstrates a production-grade agent with security, compliance, and cost controls.
+---
+# 1. ToolSandbox — WASM sandbox for secure tool execution
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ToolSandbox
+metadata:
+  name: full-sandbox
+spec:
+  runtime: wasmedge
+  image: "ghcr.io/example/code-sandbox-wasm:latest"
+  memoryLimitMB: 128
+  timeoutSeconds: 60
+  allowedHosts:
+    - "api.github.com"
+    - "pypi.org"
+  port: 8080
+---
+# 2. Policy — Hybrid eBPF + OPA enforcement
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: full-policy
+spec:
+  type: hybrid
+  enforcement: enforcing
+  description: "Network monitoring + spend limits for full-featured agent"
+  rules:
+    - name: network-monitor
+      action: audit
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+        deniedPorts:
+          - 22
+          - 3306
+    - name: spend-limit
+      action: block
+      opa:
+        rego: |
+          package agentk.spend
+          default allow = true
+          deny {
+            input.cost_usd > 100
+          }
+---
+# 3. Agent — References sandbox + policy + cost budget
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: full-featured-assistant
+spec:
+  framework: google-adk
+  description: "Production agent with WASM sandbox, policy enforcement, cost controls, and Merkle audit trail"
+  instruction: "You are a production-grade AI assistant with security sandbox, policy enforcement, and cost monitoring."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+  toolSandboxRef:
+    name: full-sandbox
+  policyRefs:
+    - name: full-policy
+  costBudget:
+    maxMonthlyCostUSD: "100.00"
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+    costPerTokenUSD: "0.00001"
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"

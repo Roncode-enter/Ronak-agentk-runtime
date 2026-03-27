@@ -1,0 +1,31 @@
+# Policy: PII Detection via eBPF network monitoring
+#
+# This policy uses eBPF to monitor network traffic leaving an agent's pod.
+# It blocks any outbound connections to unknown IPs, preventing data exfiltration
+# of personally identifiable information (PII).
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: pii-protection
+spec:
+  type: ebpf
+  enforcement: enforcing
+  description: "Prevents PII data exfiltration by restricting network egress"
+  rules:
+    - name: restrict-egress
+      action: block
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"       # Internal cluster network
+          - "172.16.0.0/12"    # Internal services
+        deniedPorts:
+          - 25    # SMTP (prevent email exfiltration)
+          - 587   # SMTP submission
+    - name: block-raw-sockets
+      action: block
+      ebpf:
+        program: syscall-filter
+        deniedSyscalls:
+          - "socket_raw"
+          - "ptrace"

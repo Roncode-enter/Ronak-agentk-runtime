@@ -18,6 +18,24 @@ spec:
     - jsonPath: .status.aiGatewayRef.name
       name: AI Gateway
       type: string
+    - jsonPath: .status.merkleRoot
+      name: Merkle Root
+      priority: 1
+      type: string
+    - jsonPath: .status.predictedMonthlyCostUSD
+      name: Cost
+      type: string
+    - jsonPath: .status.costAction
+      name: Cost Action
+      type: string
+    - jsonPath: .status.governanceStatus
+      name: Governance
+      priority: 1
+      type: string
+    - jsonPath: .status.lifecyclePhase
+      name: Lifecycle
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -107,6 +125,65 @@ spec:
                     description: Labels is a map of key/value pairs to be applied
                       to the resource.
                     type: object
+                type: object
+              costBudget:
+                description: |-
+                  CostBudget defines optional cost budget configuration for predictive cost management.
+                  When set, the operator monitors token usage and predicts monthly cost.
+                  If predicted cost exceeds the budget, the operator can downgrade the model or pause the agent.
+                properties:
+                  costPerTokenUSD:
+                    description: |-
+                      CostPerTokenUSD is the cost per token in USD (e.g., "0.00001").
+                      Used to calculate predicted monthly cost from token usage rate.
+                    pattern: ^\d+(\.\d+)?$
+                    type: string
+                  downgradeModel:
+                    description: |-
+                      DowngradeModel is the cheaper model to switch to if predicted cost exceeds the budget.
+                      If not set and budget is exceeded, the agent will be paused instead.
+                    type: string
+                  maxMonthlyCostUSD:
+                    description: |-
+                      MaxMonthlyCostUSD is the maximum monthly cost threshold in USD (e.g., "50.00").
+                      When predicted cost exceeds this, the operator takes action (downgrade or pause).
+                    pattern: ^\d+(\.\d+)?$
+                    type: string
+                required:
+                - costPerTokenUSD
+                - maxMonthlyCostUSD
+                type: object
+              costIntelligence:
+                description: |-
+                  CostIntelligence configures real-time cost optimization beyond basic CostBudget.
+                  Adds optimization modes (conservative/aggressive/auto), spot-instance hints, and budget-exhaust suspension.
+                properties:
+                  optimizationMode:
+                    default: conservative
+                    description: |-
+                      OptimizationMode controls how aggressively the optimizer acts on cost predictions.
+                      conservative: downgrade at 90% of budget, aggressive: at 70%, auto: at 80%.
+                    enum:
+                    - conservative
+                    - aggressive
+                    - auto
+                    type: string
+                  samplingIntervalSeconds:
+                    default: 60
+                    description: SamplingIntervalSeconds controls how often cost is
+                      re-evaluated during reconcile.
+                    format: int32
+                    maximum: 3600
+                    minimum: 10
+                    type: integer
+                  spotInstanceFallback:
+                    description: SpotInstanceFallback adds scheduler annotations for
+                      spot/preemptible node scheduling.
+                    type: boolean
+                  suspendOnBudgetExhaust:
+                    description: SuspendOnBudgetExhaust scales replicas to 0 when
+                      the budget is fully exhausted.
+                    type: boolean
                 type: object
               description:
                 description: |-
@@ -332,6 +409,31 @@ spec:
                 - msaf
                 - custom
                 type: string
+              governance:
+                description: Governance configures the centralized governance layer
+                  with autonomy tiers and human-in-loop gates.
+                properties:
+                  autonomyLevel:
+                    default: 3
+                    description: |-
+                      AutonomyLevel defines the agent's autonomy tier from 1 (human approves everything)
+                      to 5 (fully autonomous). Levels 1-2 require human approval, 3 requires policy compliance,
+                      4-5 are advisory only.
+                    format: int32
+                    maximum: 5
+                    minimum: 1
+                    type: integer
+                  humanApprovalWebhook:
+                    description: HumanApprovalWebhook is the URL called for human-in-loop
+                      approval at low autonomy levels (1-2).
+                    format: uri
+                    type: string
+                  requirePolicyCompliance:
+                    default: true
+                    description: RequirePolicyCompliance ensures all referenced policies
+                      must pass before deployment proceeds.
+                    type: boolean
+                type: object
               image:
                 description: |-
                   Image is the Docker image and tag to use for the microservice deployment.
@@ -342,6 +444,54 @@ spec:
                   Instruction defines the system instruction/prompt for the agent when using template images.
                   This is passed as AGENT_INSTRUCTION environment variable to the agent.
                 type: string
+              lifecycle:
+                description: Lifecycle configures Kubernetes-style lifecycle control
+                  (rolling, canary, blue-green, checkpoint).
+                properties:
+                  checkpointOnUpdate:
+                    default: true
+                    description: CheckpointOnUpdate forces a Merkle checkpoint before
+                      applying any spec change.
+                    type: boolean
+                  gracefulShutdownSeconds:
+                    default: 30
+                    description: GracefulShutdownSeconds is the termination grace
+                      period for the agent pod.
+                    format: int32
+                    maximum: 600
+                    minimum: 0
+                    type: integer
+                  maxSurge:
+                    default: 25%
+                    description: MaxSurge for rolling/canary updates (percentage string
+                      like "25%" or absolute like "1").
+                    type: string
+                  maxUnavailable:
+                    default: 25%
+                    description: MaxUnavailable for rolling updates (percentage string
+                      like "25%" or absolute like "0").
+                    type: string
+                  promptVersion:
+                    description: |-
+                      PromptVersion is an opaque version tag for tracking prompt/instruction changes.
+                      Changes to this field trigger a new rollout and Merkle checkpoint.
+                    type: string
+                  selfHealing:
+                    default: true
+                    description: SelfHealing enables automatic restart on failure
+                      via liveness probe.
+                    type: boolean
+                  strategy:
+                    default: rolling
+                    description: |-
+                      Strategy controls how updates are rolled out.
+                      rolling: standard rolling update, canary: maxSurge=1/maxUnavailable=0, blue-green: recreate.
+                    enum:
+                    - rolling
+                    - canary
+                    - blue-green
+                    type: string
+                type: object
               model:
                 description: |-
                   Model specifies the language model to use for the agent.
@@ -366,6 +516,55 @@ spec:
                       to the resource.
                     type: object
                 type: object
+              policyRefs:
+                description: |-
+                  PolicyRefs references Policy resources to enforce on this agent.
+                  When set, the operator injects eBPF/OPA enforcement sidecars into the agent pod.
+                items:
+                  description: ObjectReference contains enough information to let
+                    you inspect or modify the referred object.
+                  properties:
+                    apiVersion:
+                      description: API version of the referent.
+                      type: string
+                    fieldPath:
+                      description: |-
+                        If referring to a piece of an object instead of an entire object, this string
+                        should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                        For example, if the object reference is to a container within a pod, this would take on a value like:
+                        "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                        the event) or if no container name is specified "spec.containers[2]" (container with
+                        index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                        referencing a part of an object.
+                      type: string
+                    kind:
+                      description: |-
+                        Kind of the referent.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                      type: string
+                    name:
+                      description: |-
+                        Name of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                      type: string
+                    namespace:
+                      description: |-
+                        Namespace of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                      type: string
+                    resourceVersion:
+                      description: |-
+                        Specific resourceVersion to which this reference is made, if any.
+                        More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                      type: string
+                    uid:
+                      description: |-
+                        UID of the referent.
+                        More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                      type: string
+                  type: object
+                  x-kubernetes-map-type: atomic
+                type: array
               protocols:
                 description: Protocols defines the protocols supported by the agent
                 items:
@@ -543,6 +742,52 @@ spec:
                   - name
                   type: object
                 type: array
+              toolSandboxRef:
+                description: |-
+                  ToolSandboxRef references a ToolSandbox for WASM-based secure tool execution.
+                  When set, the operator injects a WasmEdge sidecar container into the agent pod.
+                  If Namespace is not specified, defaults to the same namespace as the Agent.
+                properties:
+                  apiVersion:
+                    description: API version of the referent.
+                    type: string
+                  fieldPath:
+                    description: |-
+                      If referring to a piece of an object instead of an entire object, this string
+                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
+                      For example, if the object reference is to a container within a pod, this would take on a value like:
+                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
+                      the event) or if no container name is specified "spec.containers[2]" (container with
+                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
+                      referencing a part of an object.
+                    type: string
+                  kind:
+                    description: |-
+                      Kind of the referent.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+                    type: string
+                  name:
+                    description: |-
+                      Name of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                    type: string
+                  namespace:
+                    description: |-
+                      Namespace of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
+                    type: string
+                  resourceVersion:
+                    description: |-
+                      Specific resourceVersion to which this reference is made, if any.
+                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
+                    type: string
+                  uid:
+                    description: |-
+                      UID of the referent.
+                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
+                    type: string
+                type: object
+                x-kubernetes-map-type: atomic
               tools:
                 description: |-
                   Tools defines configuration for integrating MCP (Model Context Protocol) tools.
@@ -622,6 +867,44 @@ spec:
                   - name
                   type: object
                 type: array
+              verifiable:
+                description: Verifiable configures verifiable execution with cryptographic
+                  proof chains and attestation reports.
+                properties:
+                  attestationSignerSecret:
+                    description: |-
+                      AttestationSignerSecret references a Kubernetes Secret containing a signing key for attestation reports.
+                      The Secret should have a key named "signing-key".
+                    type: string
+                  enabled:
+                    default: false
+                    description: Enabled turns on verifiable execution proof generation.
+                    type: boolean
+                  proofMode:
+                    default: merkle-only
+                    description: |-
+                      ProofMode selects the proof algorithm.
+                      merkle-only: SHA-256 Merkle chain (free tier),
+                      sha3-attestation: SHA-256 proof chain + signed attestation (legacy),
+                      full-zk: alias for snark-groth16 (legacy),
+                      snark-groth16: real Groth16 zk-SNARK proof via gnark (standard tier),
+                      plonk-universal: PlonK universal SNARK via gnark (premium tier).
+                    enum:
+                    - merkle-only
+                    - sha3-attestation
+                    - full-zk
+                    - snark-groth16
+                    - plonk-universal
+                    type: string
+                  proofRetentionDays:
+                    default: 30
+                    description: ProofRetentionDays controls how long proof data is
+                      retained in status annotations.
+                    format: int32
+                    maximum: 365
+                    minimum: 1
+                    type: integer
+                type: object
               volumeMounts:
                 description: VolumeMounts defines volume mounts to be added to the
                   agent container.
@@ -2641,6 +2924,16 @@ spec:
                     type: string
                 type: object
                 x-kubernetes-map-type: atomic
+              attestationDigest:
+                description: |-
+                  AttestationDigest is the latest signed attestation report hash.
+                  Provides a tamper-proof digest that can be verified externally.
+                type: string
+              checkpointCount:
+                description: CheckpointCount tracks the total number of reconciliation
+                  checkpoints created.
+                format: int32
+                type: integer
               conditions:
                 items:
                   description: Condition contains details for one aspect of the current
@@ -2697,11 +2990,54 @@ spec:
                   - type
                   type: object
                 type: array
+              costAction:
+                description: |-
+                  CostAction indicates what action was taken based on cost prediction.
+                  Possible values: "none" (within budget), "downgraded" (switched to cheaper model), "paused" (over budget, no downgrade available).
+                type: string
+              governanceStatus:
+                description: |-
+                  GovernanceStatus shows the current governance compliance state.
+                  Possible values: "compliant", "pending-approval", "non-compliant".
+                type: string
+              lastCheckpointTime:
+                description: LastCheckpointTime is the timestamp of the most recent
+                  reconciliation checkpoint.
+                format: date-time
+                type: string
+              lifecyclePhase:
+                description: |-
+                  LifecyclePhase shows the current lifecycle phase of the agent.
+                  Possible values: "stable", "updating", "suspended".
+                type: string
+              merkleRoot:
+                description: |-
+                  MerkleRoot is the current Merkle root hash of all reconciliation checkpoints.
+                  This provides an immutable audit trail — if any checkpoint is tampered with, the root won't match.
+                  Automatically populated by the controller on every reconciliation.
+                type: string
+              predictedMonthlyCostUSD:
+                description: |-
+                  PredictedMonthlyCostUSD is the estimated monthly cost in USD based on current token usage rate.
+                  Only populated when CostBudget is configured on the agent spec.
+                type: string
+              tokensUsed:
+                description: |-
+                  TokensUsed tracks the total tokens consumed by this agent.
+                  This field is intended to be updated by external metrics systems (e.g., Prometheus, agent runtime).
+                  The controller reads this value to project costs but does not write it.
+                format: int64
+                type: integer
               url:
                 description: |-
                   Url is the cluster-local URL where this agent can be accessed via A2A protocol.
                   This is automatically populated by the controller when the agent has an A2A protocol configured.
                   Format: http://{name}.{namespace}.svc.cluster.local:{port}/.well-known/agent-card.json
+                type: string
+              zkProofRoot:
+                description: |-
+                  ZKProofRoot is the root hash of the verifiable proof chain (SHA-256, zk-SNARK ready).
+                  Populated when spec.verifiable.enabled is true.
                 type: string
             type: object
         type: object

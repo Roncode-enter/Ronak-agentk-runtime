@@ -26,10 +26,15 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	runtimev1alpha1 "github.com/agentic-layer/agent-runtime-operator/api/v1alpha1"
+	"github.com/agentic-layer/agent-runtime-operator/internal/costpredictor"
 )
 
-// updateAgentStatusReady sets the agent status to Ready and updates the A2A URL and AiGatewayRef
-func (r *AgentReconciler) updateAgentStatusReady(ctx context.Context, agent *runtimev1alpha1.Agent, aiGateway *runtimev1alpha1.AiGateway) error {
+// updateAgentStatusReady sets the agent status to Ready and updates the A2A URL, AiGatewayRef,
+// Merkle checkpoint fields, and cost prediction fields.
+func (r *AgentReconciler) updateAgentStatusReady(ctx context.Context, agent *runtimev1alpha1.Agent,
+	aiGateway *runtimev1alpha1.AiGateway, merkleRoot string, checkpointCount int32,
+	lastCheckpointTime *metav1.Time, costPrediction *costpredictor.CostPrediction,
+	zkProofRoot, attestationDigest, governanceStatus, lifecyclePhase string) error {
 	log := logf.FromContext(ctx)
 	log.V(1).Info("Updating agent status to Ready")
 	// Compute the A2A URL if the agent has an A2A protocol
@@ -46,6 +51,23 @@ func (r *AgentReconciler) updateAgentStatusReady(ctx context.Context, agent *run
 	} else {
 		agent.Status.AiGatewayRef = nil
 	}
+
+	// Set Merkle checkpoint fields
+	agent.Status.MerkleRoot = merkleRoot
+	agent.Status.CheckpointCount = checkpointCount
+	agent.Status.LastCheckpointTime = lastCheckpointTime
+
+	// Set cost prediction fields if available
+	if costPrediction != nil {
+		agent.Status.PredictedMonthlyCostUSD = costPrediction.PredictedMonthlyCostUSD
+		agent.Status.CostAction = costPrediction.Action
+	}
+
+	// Set sovereign status fields
+	agent.Status.ZKProofRoot = zkProofRoot
+	agent.Status.AttestationDigest = attestationDigest
+	agent.Status.GovernanceStatus = governanceStatus
+	agent.Status.LifecyclePhase = lifecyclePhase
 
 	// Set Ready condition to True
 	meta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{

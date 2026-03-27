@@ -7,6 +7,7 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - configmaps
   - services
   verbs:
   - create
@@ -41,6 +42,11 @@ rules:
   resources:
   - agenticworkforces
   - agents
+  - confidentialagents
+  - policies
+  - simulationpreviews
+  - swarms
+  - toolsandboxes
   - toolservers
   verbs:
   - create
@@ -55,6 +61,11 @@ rules:
   resources:
   - agenticworkforces/finalizers
   - agents/finalizers
+  - confidentialagents/finalizers
+  - policies/finalizers
+  - simulationpreviews/finalizers
+  - swarms/finalizers
+  - toolsandboxes/finalizers
   - toolservers/finalizers
   verbs:
   - update
@@ -63,6 +74,11 @@ rules:
   resources:
   - agenticworkforces/status
   - agents/status
+  - confidentialagents/status
+  - policies/status
+  - simulationpreviews/status
+  - swarms/status
+  - toolsandboxes/status
   - toolservers/status
   verbs:
   - get

@@ -1,0 +1,51 @@
+# =============================================================================
+# Lifecycle Agent — Canary deployment + prompt versioning
+# =============================================================================
+# This agent uses canary deployment strategy with prompt version tracking.
+# When you change the prompt, a new canary pod rolls out one at a time.
+#
+# Test:  kubectl apply -f examples/lifecycle-agent.yaml
+# Check: kubectl get agent lifecycle-agent -o wide
+# =============================================================================
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: lifecycle-agent
+  labels:
+    lifecycle: canary
+spec:
+  framework: google-adk
+  description: "Agent with canary deployment and prompt versioning"
+  instruction: "You are a customer service agent. Your prompts are version-controlled and rolled out via canary deployments."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 3
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+
+  # Lifecycle: canary + prompt version + self-healing
+  lifecycle:
+    strategy: canary
+    promptVersion: "v2.1.0"
+    checkpointOnUpdate: true
+    gracefulShutdownSeconds: 45
+    selfHealing: true
+    maxSurge: "1"
+    maxUnavailable: "0"
+
+  # Verifiable: checkpoint every change
+  verifiable:
+    enabled: true
+    proofMode: merkle-only
+
+# After applying:
+#   kubectl get agent lifecycle-agent -o wide
+#     LIFECYCLE
+#     stable
+#
+# To trigger a canary rollout, change promptVersion:
+#   kubectl patch agent lifecycle-agent --type=merge -p '{"spec":{"lifecycle":{"promptVersion":"v2.2.0"}}}'
+#   kubectl get agent lifecycle-agent -o jsonpath='{.status.lifecyclePhase}'
+#   # "updating" → then "stable" after rollout completes

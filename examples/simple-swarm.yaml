@@ -1,0 +1,46 @@
+# Simple Swarm: Round-Robin Load Balancing
+# Distributes incoming A2A requests evenly across two agents.
+# The coordinator acts like a load balancer for AI agents.
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: helper-agent-a
+spec:
+  framework: google-adk
+  description: "Helper Agent A — handles general questions"
+  instruction: "You are Helper A. Answer questions helpfully and concisely."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: helper-agent-b
+spec:
+  framework: google-adk
+  description: "Helper Agent B — handles general questions"
+  instruction: "You are Helper B. Answer questions helpfully and concisely."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Swarm
+metadata:
+  name: simple-swarm
+spec:
+  # round-robin: each request goes to the next agent in rotation
+  strategy: round-robin
+  agents:
+    - name: helper-a
+      agentRef:
+        name: helper-agent-a
+    - name: helper-b
+      agentRef:
+        name: helper-agent-b

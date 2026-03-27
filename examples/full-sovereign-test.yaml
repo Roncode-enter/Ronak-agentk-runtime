@@ -1,0 +1,251 @@
+# =============================================================================
+# Full Sovereign Test — ALL 7 Pillars Verification
+# =============================================================================
+# One command to prove AgentK is production-ready.
+#
+# Apply:   kubectl apply -f examples/full-sovereign-test.yaml
+# Wait:    sleep 30
+# Verify:  Follow the 7-pillar checklist in README.md
+# Cleanup: kubectl delete -f examples/full-sovereign-test.yaml
+# =============================================================================
+
+# --- Pillar 2: Integration (WASM Sandbox for secure tool execution) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ToolSandbox
+metadata:
+  name: pillar-sandbox
+  labels:
+    test: pillar-verification
+spec:
+  runtime: wasmedge
+  image: ghcr.io/agentic-layer/tool-sandbox:0.1.0
+  memoryLimitMB: 128
+  timeoutSeconds: 30
+  allowedHosts:
+    - "api.example.com"
+
+---
+
+# --- Pillar 1: Governance (eBPF + OPA hybrid policy enforcement) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: pillar-policy
+  labels:
+    test: pillar-verification
+spec:
+  type: hybrid
+  enforcement: enforcing
+  description: "Pillar test: kernel-level network egress + OPA spend limit"
+  rules:
+    - name: network-egress
+      action: block
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+    - name: spend-limit
+      action: alert
+      opa:
+        rego: |
+          package agentk.spend
+          violation[msg] {
+            input.predicted_cost > input.max_cost
+            msg := sprintf("Predicted cost $%v exceeds budget $%v", [input.predicted_cost, input.max_cost])
+          }
+
+---
+
+# --- Pillars 1,2,3,4,5: Primary Sovereign Agent (ALL features active) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: pillar-agent-alpha
+  labels:
+    tier: sovereign
+    test: pillar-verification
+spec:
+  framework: google-adk
+  description: "Primary pillar test agent with every sovereign feature enabled"
+  instruction: "You are a test agent validating all 7 pillars of AgentK. Every action is verified, governed, and cost-optimized."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+
+  # Cost Budget + Real-time Cost Intelligence (Pillar 4+5)
+  costBudget:
+    maxMonthlyCostUSD: "100.00"
+    costPerTokenUSD: "0.00001"
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+  costIntelligence:
+    optimizationMode: auto
+    spotInstanceFallback: true
+    suspendOnBudgetExhaust: true
+    samplingIntervalSeconds: 30
+
+  # Verifiable Execution with zk-proof chain (Pillar 1)
+  verifiable:
+    enabled: true
+    proofMode: full-zk
+    proofRetentionDays: 90
+
+  # Governance tier 3 (Pillar 1)
+  governance:
+    autonomyLevel: 3
+    requirePolicyCompliance: true
+
+  # Lifecycle control: canary + self-healing (Pillar 3)
+  lifecycle:
+    strategy: canary
+    promptVersion: "v1.0.0"
+    checkpointOnUpdate: true
+    selfHealing: true
+    gracefulShutdownSeconds: 30
+
+  # WASM sandbox + eBPF/OPA policy (Pillar 2)
+  toolSandboxRef:
+    name: pillar-sandbox
+  policyRefs:
+    - name: pillar-policy
+
+---
+
+# --- Pillar 3: Orchestration (secondary agent for Swarm) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: pillar-agent-beta
+  labels:
+    test: pillar-verification
+spec:
+  framework: google-adk
+  description: "Secondary agent for swarm coordination testing"
+  instruction: "You are a worker agent in the pillar verification swarm."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+  verifiable:
+    enabled: true
+    proofMode: merkle-only
+
+---
+
+# --- Pillar 1: Governance (TEE hardware attestation) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ConfidentialAgent
+metadata:
+  name: pillar-tee-alpha
+  labels:
+    test: pillar-verification
+spec:
+  agentRef:
+    name: pillar-agent-alpha
+  teeProvider: kata-cc
+  memoryEncryption: true
+  enclaveMemoryMB: 256
+  attestationIntervalSeconds: 300
+
+---
+
+# --- Pillar 3: Orchestration (Swarm multi-agent coordination) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Swarm
+metadata:
+  name: pillar-swarm
+  labels:
+    test: pillar-verification
+spec:
+  strategy: chain
+  timeoutSeconds: 60
+  agents:
+    - name: alpha
+      agentRef:
+        name: pillar-agent-alpha
+      role: leader
+    - name: beta
+      agentRef:
+        name: pillar-agent-beta
+      role: worker
+
+---
+
+# --- Pillar 4: Observability (dry-run simulation preview) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: SimulationPreview
+metadata:
+  name: pillar-preview
+  labels:
+    test: pillar-verification
+spec:
+  agentRef:
+    name: pillar-agent-alpha
+  dryRun: true
+
+---
+
+# --- Pillars 6+7: Ecosystem & Distribution (workforce auto-discovery) ---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: AgenticWorkforce
+metadata:
+  name: pillar-workforce
+  labels:
+    test: pillar-verification
+spec:
+  name: "Pillar Verification Workforce"
+  description: "Workforce combining all pillar test agents for full verification"
+  owner: "pillar-test@agentk.dev"
+  tags:
+    - pillar-test
+    - verification
+    - all-7-pillars
+  entryPointAgents:
+    - name: pillar-agent-alpha
+    - name: pillar-agent-beta
+
+# =============================================================================
+# VERIFICATION COMMANDS (copy-paste after applying)
+# =============================================================================
+#
+# Pillar 1 — Governance (Trust):
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.zkProofRoot}'
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.governanceStatus}'
+#   kubectl get confidentialagent pillar-tee-alpha
+#   kubectl get policy pillar-policy
+#
+# Pillar 2 — Integration (Access):
+#   kubectl get toolsandbox pillar-sandbox
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.spec.toolSandboxRef.name}'
+#
+# Pillar 3 — Orchestration (Execution):
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.lifecyclePhase}'
+#   kubectl get swarm pillar-swarm
+#   kubectl get deployment pillar-agent-alpha pillar-agent-beta
+#
+# Pillar 4 — Observability (Control):
+#   kubectl get simulationpreview pillar-preview
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.predictedMonthlyCostUSD}'
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.attestationDigest}'
+#
+# Pillar 5 — Data Flywheel (Improvement):
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.spec.costIntelligence.optimizationMode}'
+#   kubectl get agent pillar-agent-alpha -o jsonpath='{.status.costAction}'
+#
+# Pillar 6 — Ecosystem (Scale):
+#   kubectl get agenticworkforce pillar-workforce
+#   kubectl get crd | grep agentic-layer | wc -l
+#
+# Pillar 7 — Distribution (Adoption):
+#   kubectl get agent,swarm,confidentialagent,simulationpreview,agenticworkforce | grep pillar
+#
+# Cleanup:
+#   kubectl delete -f examples/full-sovereign-test.yaml
+# =============================================================================

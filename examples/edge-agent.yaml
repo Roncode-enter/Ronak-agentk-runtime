@@ -1,0 +1,31 @@
+# Edge Agent: Lightweight deployment for k3s / edge devices
+# Uses minimal resources — ideal for Raspberry Pi, IoT gateways, or k3s clusters.
+# Deploy the operator with edge profile first:
+#   kustomize build config/edge | kubectl apply -f -
+---
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: edge-agent
+spec:
+  framework: google-adk
+  description: "Lightweight edge agent for constrained environments"
+  instruction: "You are an edge agent running on a constrained device. Be concise and efficient. Minimize token usage."
+  # Use the cheapest/fastest model for edge
+  model: "gemini/gemini-2.0-flash-lite"
+  protocols:
+    - type: A2A
+      port: 8000
+  replicas: 1
+  # Minimal resources for edge deployment
+  resources:
+    requests:
+      memory: "128Mi"
+      cpu: "50m"
+    limits:
+      memory: "256Mi"
+      cpu: "200m"
+  # Optional: add cost budget to prevent runaway spend on edge
+  costBudget:
+    maxMonthlyCostUSD: "10.00"
+    costPerTokenUSD: "0.000001"

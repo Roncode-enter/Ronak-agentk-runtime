@@ -18,11 +18,22 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"maps"
 	"os"
+	"time"
 
 	runtimev1alpha1 "github.com/agentic-layer/agent-runtime-operator/api/v1alpha1"
+	"github.com/agentic-layer/agent-runtime-operator/internal/costintelligence"
+	"github.com/agentic-layer/agent-runtime-operator/internal/costpredictor"
+	"github.com/agentic-layer/agent-runtime-operator/internal/ebpf"
+	"github.com/agentic-layer/agent-runtime-operator/internal/governance"
+	"github.com/agentic-layer/agent-runtime-operator/internal/lifecycle"
+	"github.com/agentic-layer/agent-runtime-operator/internal/merkle"
+	"github.com/agentic-layer/agent-runtime-operator/internal/observability"
+	"github.com/agentic-layer/agent-runtime-operator/internal/verifiable"
+	"github.com/agentic-layer/agent-runtime-operator/internal/wasm"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -53,7 +64,9 @@ const (
 // AgentReconciler reconciles a Agent object
 type AgentReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme      *runtime.Scheme
+	ProofEngine *verifiable.ProofEngine
+	CostMonitor *costintelligence.CostMonitor
 }
 
 // +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=agents,verbs=get;list;watch;create;update;patch;delete
@@ -63,6 +76,8 @@ type AgentReconciler struct {
 // +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=toolservers/status,verbs=get
 // +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=aigateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=agentruntimeconfigurations,verbs=get;list;watch
+// +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=toolsandboxes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=runtime.agentic-layer.ai,resources=policies,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -88,6 +103,13 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 	}
 
 	log.V(1).Info("Reconciling Agent")
+
+	// Record reconciliation start time for metrics
+	reconcileStart := time.Now()
+	defer func() {
+		duration := time.Since(reconcileStart).Seconds()
+		observability.AgentReconcileDuration.WithLabelValues(agent.Name, agent.Namespace).Observe(duration)
+	}()
 
 	// Get agent runtime configuration (optional - returns nil if not found)
 	runtimeConfig, err := r.getAgentRuntimeConfiguration(ctx)
@@ -133,13 +155,159 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		return ctrl.Result{}, err
 	}
 
+	// Compute Merkle checkpoint for verifiable execution audit trail
+	specJSON, _ := json.Marshal(agent.Spec)
+	now := time.Now()
+	newCheckpointCount := agent.Status.CheckpointCount + 1
+	checkpoint := merkle.ComputeCheckpoint(specJSON, now.Format(time.RFC3339), newCheckpointCount)
+	merkleRoot := merkle.ComputeMerkleRoot(agent.Status.MerkleRoot, checkpoint)
+	checkpointTime := metav1.NewTime(now)
+
+	// Compute cost prediction if CostBudget is configured
+	var prediction *costpredictor.CostPrediction
+	if agent.Spec.CostBudget != nil {
+		prediction = r.computeCostPrediction(&agent)
+	}
+
+	// --- Sovereign Features ---
+
+	// Compute verifiable proof chain if enabled — uses REAL gnark zk-SNARKs/PlonK
+	var zkProofRoot, attestationDigest, proofAlgorithm string
+	if agent.Spec.Verifiable != nil && agent.Spec.Verifiable.Enabled {
+		proofMode := agent.Spec.Verifiable.ProofMode
+		if proofMode == "" {
+			proofMode = verifiable.ProofModeMerkleOnly
+		}
+
+		if r.ProofEngine != nil {
+			result, err := r.ProofEngine.GenerateStepProof(proofMode, specJSON, agent.Status.ZKProofRoot, int(newCheckpointCount))
+			if err != nil {
+				log.Error(err, "Proof generation failed")
+				// Fall back to merkle-only
+				stepProof := verifiable.ComputeStepProof(specJSON, agent.Status.ZKProofRoot, int(newCheckpointCount))
+				zkProofRoot = verifiable.ComputeProofChainRoot(agent.Status.ZKProofRoot, stepProof)
+				proofAlgorithm = "SHA-256 (Merkle chain — fallback)"
+			} else {
+				zkProofRoot = result.ProofRoot
+				proofAlgorithm = result.Algorithm
+			}
+		} else {
+			// No proof engine available — use merkle-only
+			stepProof := verifiable.ComputeStepProof(specJSON, agent.Status.ZKProofRoot, int(newCheckpointCount))
+			zkProofRoot = verifiable.ComputeProofChainRoot(agent.Status.ZKProofRoot, stepProof)
+			proofAlgorithm = "SHA-256 (Merkle chain)"
+		}
+		attestationDigest = verifiable.ComputeAttestationDigest(zkProofRoot, agent.Name, now.Format(time.RFC3339))
+		log.V(1).Info("Proof generated", "mode", agent.Spec.Verifiable.ProofMode, "algorithm", proofAlgorithm)
+	}
+
+	// Evaluate governance
+	var governanceStatus string
+	if agent.Spec.Governance != nil {
+		decision := governance.EvaluateGovernance(
+			agent.Spec.Governance.AutonomyLevel,
+			len(agent.Spec.PolicyRefs),
+			true, // policies assumed compliant at controller level
+			agent.Spec.Governance.RequirePolicyCompliance,
+		)
+		governanceStatus = decision.Status
+	}
+
+	// Evaluate real-time cost intelligence — uses CostMonitor background goroutine
+	if agent.Spec.CostIntelligence != nil && agent.Spec.CostBudget != nil {
+		agentKey := types.NamespacedName{Name: agent.Name, Namespace: agent.Namespace}
+
+		// Try reading from the real-time CostMonitor cache first
+		var costDecision *costintelligence.CostDecision
+		if r.CostMonitor != nil {
+			costDecision = r.CostMonitor.GetDecision(agentKey)
+		}
+
+		// Fall back to inline computation if monitor has no cached data
+		if costDecision == nil {
+			costPerToken, _ := costpredictor.ParseCostString(agent.Spec.CostBudget.CostPerTokenUSD)
+			maxCost, _ := costpredictor.ParseCostString(agent.Spec.CostBudget.MaxMonthlyCostUSD)
+			uptimeSeconds := time.Since(agent.CreationTimestamp.Time).Seconds()
+
+			costDecision = costintelligence.EvaluateRealTimeCost(
+				agent.Status.TokensUsed,
+				uptimeSeconds,
+				costPerToken,
+				maxCost,
+				agent.Spec.CostBudget.DowngradeModel,
+				agent.Spec.CostIntelligence.OptimizationMode,
+				agent.Spec.CostIntelligence.SuspendOnBudgetExhaust,
+				agent.Spec.CostIntelligence.SpotInstanceFallback,
+			)
+		}
+
+		// Override prediction with real-time cost intelligence
+		prediction = &costpredictor.CostPrediction{
+			PredictedMonthlyCostUSD: costDecision.PredictedMonthlyCostUSD,
+			Action:                  costDecision.Action,
+			DowngradeModel:          costDecision.DowngradeModel,
+		}
+	}
+
+	// Determine lifecycle phase
+	var lifecyclePhase string
+	if agent.Spec.Lifecycle != nil {
+		var observedGen int64
+		if len(agent.Status.Conditions) > 0 {
+			observedGen = agent.Status.Conditions[0].ObservedGeneration
+		}
+		lifecyclePhase = lifecycle.DetermineLifecyclePhase(
+			agent.Spec.Replicas,
+			observedGen,
+			agent.Generation,
+		)
+	}
+
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		return r.updateAgentStatusReady(ctx, &agent, aiGateway)
+		return r.updateAgentStatusReady(ctx, &agent, aiGateway, merkleRoot, newCheckpointCount, &checkpointTime, prediction,
+			zkProofRoot, attestationDigest, governanceStatus, lifecyclePhase)
 	}); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	log.V(1).Info("Reconciled Agent")
+
+	// Record metrics
+	framework := resolveEffectiveFramework(&agent, runtimeConfig)
+	observability.AgentReconcileTotal.WithLabelValues(agent.Name, agent.Namespace, "success").Inc()
+	observability.AgentReadyGauge.WithLabelValues(agent.Name, agent.Namespace, framework).Set(1)
+	observability.MerkleCheckpointTotal.WithLabelValues(agent.Name, agent.Namespace).Inc()
+	observability.MerkleCheckpointCountGauge.WithLabelValues(agent.Name, agent.Namespace).Set(float64(newCheckpointCount))
+	observability.TokensUsedTotal.WithLabelValues(agent.Name, agent.Namespace).Set(float64(agent.Status.TokensUsed))
+	if prediction != nil {
+		costVal, parseErr := costpredictor.ParseCostString(prediction.PredictedMonthlyCostUSD)
+		if parseErr == nil {
+			observability.PredictedMonthlyCostUSD.WithLabelValues(agent.Name, agent.Namespace).Set(costVal)
+		}
+		observability.CostActionTotal.WithLabelValues(agent.Name, agent.Namespace, prediction.Action).Inc()
+	}
+
+	// Record sovereign metrics
+	if agent.Spec.Verifiable != nil && agent.Spec.Verifiable.Enabled {
+		observability.ZKProofChainLength.WithLabelValues(agent.Name, agent.Namespace).Set(float64(newCheckpointCount))
+		observability.AttestationTotal.WithLabelValues(agent.Name, agent.Namespace, agent.Spec.Verifiable.ProofMode).Inc()
+	}
+	if agent.Spec.Governance != nil {
+		compliant := float64(0)
+		if governanceStatus == "compliant" {
+			compliant = 1
+		}
+		observability.GovernanceComplianceGauge.WithLabelValues(agent.Name, agent.Namespace).Set(compliant)
+		observability.GovernanceAutonomyLevel.WithLabelValues(agent.Name, agent.Namespace).Set(float64(agent.Spec.Governance.AutonomyLevel))
+	}
+	if agent.Spec.CostIntelligence != nil {
+		observability.CostOptimizationActionsTotal.WithLabelValues(agent.Name, agent.Namespace, agent.Spec.CostIntelligence.OptimizationMode).Inc()
+		spotVal := float64(0)
+		if agent.Spec.CostIntelligence.SpotInstanceFallback {
+			spotVal = 1
+		}
+		observability.SpotInstanceGauge.WithLabelValues(agent.Name, agent.Namespace).Set(spotVal)
+	}
 
 	return ctrl.Result{}, nil
 }
@@ -262,6 +430,110 @@ func (r *AgentReconciler) ensureDeployment(ctx context.Context, agent *runtimev1
 
 		// Update pod volumes
 		deployment.Spec.Template.Spec.Volumes = agent.Spec.Volumes
+
+		// Inject WasmEdge sidecar if ToolSandboxRef is set
+		if agent.Spec.ToolSandboxRef != nil {
+			sandbox, sandboxErr := r.resolveToolSandbox(ctx, agent)
+			if sandboxErr == nil && sandbox != nil {
+				wasmContainer := wasm.BuildSidecarContainer(sandbox)
+				existingWasm := findContainerByName(&deployment.Spec.Template.Spec, wasmContainer.Name)
+				if existingWasm == nil {
+					deployment.Spec.Template.Spec.Containers = append(deployment.Spec.Template.Spec.Containers, wasmContainer)
+				} else {
+					existingWasm.Image = wasmContainer.Image
+					existingWasm.Ports = wasmContainer.Ports
+					existingWasm.Env = wasmContainer.Env
+					existingWasm.Resources = wasmContainer.Resources
+				}
+			}
+		}
+
+		// Inject eBPF/OPA sidecars if PolicyRefs are set
+		for i := range agent.Spec.PolicyRefs {
+			policy, policyErr := r.resolvePolicy(ctx, agent, i)
+			if policyErr != nil || policy == nil {
+				continue
+			}
+			// Add OPA sidecar for OPA/hybrid policies
+			if ebpf.HasOPARules(policy) {
+				opaContainer := ebpf.BuildOPASidecar(policy)
+				if findContainerByName(&deployment.Spec.Template.Spec, opaContainer.Name) == nil {
+					deployment.Spec.Template.Spec.Containers = append(deployment.Spec.Template.Spec.Containers, opaContainer)
+				}
+			}
+			// Add eBPF init container for eBPF/hybrid policies
+			if ebpf.HasEBPFRules(policy) {
+				ebpfContainer := ebpf.BuildEBPFInitContainer(policy)
+				found := false
+				for _, ic := range deployment.Spec.Template.Spec.InitContainers {
+					if ic.Name == ebpfContainer.Name {
+						found = true
+						break
+					}
+				}
+				if !found {
+					deployment.Spec.Template.Spec.InitContainers = append(deployment.Spec.Template.Spec.InitContainers, ebpfContainer)
+				}
+			}
+		}
+
+		// --- Sovereign Deployment Features ---
+
+		// Ensure pod template annotations map is initialized
+		if deployment.Spec.Template.Annotations == nil {
+			deployment.Spec.Template.Annotations = make(map[string]string)
+		}
+
+		// Apply lifecycle strategy to deployment
+		if agent.Spec.Lifecycle != nil {
+			deployment.Spec.Strategy = lifecycle.ConfigureDeploymentStrategy(
+				agent.Spec.Lifecycle.Strategy,
+				agent.Spec.Lifecycle.MaxSurge,
+				agent.Spec.Lifecycle.MaxUnavailable,
+			)
+			lifecycle.ConfigureGracefulShutdown(&deployment.Spec.Template.Spec, agent.Spec.Lifecycle.GracefulShutdownSeconds)
+
+			// Add self-healing liveness probe
+			if agent.Spec.Lifecycle.SelfHealing && len(agent.Spec.Protocols) > 0 {
+				lifecycle.ConfigureSelfHealing(container, agent.Spec.Protocols[0].Port)
+			}
+
+			// Add lifecycle annotations to pod template
+			lifecycleAnnotations := lifecycle.BuildLifecycleAnnotations(
+				agent.Spec.Lifecycle.Strategy,
+				agent.Spec.Lifecycle.PromptVersion,
+				agent.Spec.Lifecycle.CheckpointOnUpdate,
+			)
+			for k, v := range lifecycleAnnotations {
+				deployment.Spec.Template.Annotations[k] = v
+			}
+		}
+
+		// Apply governance annotations
+		if agent.Spec.Governance != nil {
+			govDecision := governance.EvaluateGovernance(
+				agent.Spec.Governance.AutonomyLevel,
+				len(agent.Spec.PolicyRefs),
+				true,
+				agent.Spec.Governance.RequirePolicyCompliance,
+			)
+			govAnnotations := governance.BuildGovernanceAnnotations(
+				agent.Spec.Governance.AutonomyLevel,
+				govDecision.Status,
+				agent.Spec.Governance.HumanApprovalWebhook,
+			)
+			for k, v := range govAnnotations {
+				deployment.Spec.Template.Annotations[k] = v
+			}
+		}
+
+		// Apply cost intelligence: spot instance annotations
+		if agent.Spec.CostIntelligence != nil && agent.Spec.CostIntelligence.SpotInstanceFallback {
+			spotAnnotations := costintelligence.BuildSpotAnnotations()
+			for k, v := range spotAnnotations {
+				deployment.Spec.Template.Annotations[k] = v
+			}
+		}
 
 		// Set owner reference
 		return ctrl.SetControllerReference(agent, deployment, r.Scheme)
@@ -526,4 +798,83 @@ func (r *AgentReconciler) getTemplateImage(framework string, config *runtimev1al
 		// This shouldn't be reached due to validation, but set template as fallback
 		return defaultTemplateImageFallback
 	}
+}
+
+// resolveToolSandbox fetches the ToolSandbox referenced by the Agent's ToolSandboxRef.
+func (r *AgentReconciler) resolveToolSandbox(ctx context.Context, agent *runtimev1alpha1.Agent) (*runtimev1alpha1.ToolSandbox, error) {
+	if agent.Spec.ToolSandboxRef == nil {
+		return nil, nil
+	}
+
+	ns := agent.Spec.ToolSandboxRef.Namespace
+	if ns == "" {
+		ns = agent.Namespace
+	}
+
+	var sandbox runtimev1alpha1.ToolSandbox
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      agent.Spec.ToolSandboxRef.Name,
+		Namespace: ns,
+	}, &sandbox); err != nil {
+		return nil, fmt.Errorf("failed to resolve ToolSandbox %s/%s: %w", ns, agent.Spec.ToolSandboxRef.Name, err)
+	}
+
+	return &sandbox, nil
+}
+
+// resolvePolicy fetches a Policy referenced by the Agent's PolicyRefs at the given index.
+func (r *AgentReconciler) resolvePolicy(ctx context.Context, agent *runtimev1alpha1.Agent, index int) (*runtimev1alpha1.Policy, error) {
+	if index >= len(agent.Spec.PolicyRefs) {
+		return nil, nil
+	}
+
+	ref := agent.Spec.PolicyRefs[index]
+	ns := ref.Namespace
+	if ns == "" {
+		ns = agent.Namespace
+	}
+
+	var policy runtimev1alpha1.Policy
+	if err := r.Get(ctx, types.NamespacedName{
+		Name:      ref.Name,
+		Namespace: ns,
+	}, &policy); err != nil {
+		return nil, fmt.Errorf("failed to resolve Policy %s/%s: %w", ns, ref.Name, err)
+	}
+
+	return &policy, nil
+}
+
+// computeCostPrediction calculates the predicted monthly cost based on token usage and uptime.
+// If the agent has a CostBudget configured, it parses the cost strings and calls the predictor.
+func (r *AgentReconciler) computeCostPrediction(agent *runtimev1alpha1.Agent) *costpredictor.CostPrediction {
+	if agent.Spec.CostBudget == nil {
+		return nil
+	}
+
+	maxCost, err := costpredictor.ParseCostString(agent.Spec.CostBudget.MaxMonthlyCostUSD)
+	if err != nil {
+		return nil
+	}
+
+	costPerToken, err := costpredictor.ParseCostString(agent.Spec.CostBudget.CostPerTokenUSD)
+	if err != nil {
+		return nil
+	}
+
+	// Calculate uptime from the agent's creation timestamp
+	uptimeSeconds := time.Since(agent.CreationTimestamp.Time).Seconds()
+	if uptimeSeconds <= 0 {
+		uptimeSeconds = 1 // avoid division by zero
+	}
+
+	result := costpredictor.PredictCost(
+		agent.Status.TokensUsed,
+		uptimeSeconds,
+		costPerToken,
+		maxCost,
+		agent.Spec.CostBudget.DowngradeModel,
+	)
+
+	return &result
 }

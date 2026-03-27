@@ -68,7 +68,7 @@ var _ = Describe("Agent Status", func() {
 			}
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
-			err := reconciler.updateAgentStatusReady(ctx, agent, nil)
+			err := reconciler.updateAgentStatusReady(ctx, agent, nil, "", 0, nil, nil, "", "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedAgent := &runtimev1alpha1.Agent{}
@@ -89,7 +89,7 @@ var _ = Describe("Agent Status", func() {
 			}
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
-			err := reconciler.updateAgentStatusReady(ctx, agent, nil)
+			err := reconciler.updateAgentStatusReady(ctx, agent, nil, "", 0, nil, nil, "", "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedAgent := &runtimev1alpha1.Agent{}
@@ -123,7 +123,7 @@ var _ = Describe("Agent Status", func() {
 			}
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
-			err := reconciler.updateAgentStatusReady(ctx, agent, nil)
+			err := reconciler.updateAgentStatusReady(ctx, agent, nil, "", 0, nil, nil, "", "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedAgent := &runtimev1alpha1.Agent{}
@@ -154,7 +154,7 @@ var _ = Describe("Agent Status", func() {
 				},
 			}
 
-			err := reconciler.updateAgentStatusReady(ctx, agent, aiGateway)
+			err := reconciler.updateAgentStatusReady(ctx, agent, aiGateway, "", 0, nil, nil, "", "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedAgent := &runtimev1alpha1.Agent{}
@@ -177,7 +177,7 @@ var _ = Describe("Agent Status", func() {
 			}
 			Expect(k8sClient.Create(ctx, agent)).To(Succeed())
 
-			err := reconciler.updateAgentStatusReady(ctx, agent, nil)
+			err := reconciler.updateAgentStatusReady(ctx, agent, nil, "", 0, nil, nil, "", "", "", "")
 			Expect(err).NotTo(HaveOccurred())
 
 			updatedAgent := &runtimev1alpha1.Agent{}

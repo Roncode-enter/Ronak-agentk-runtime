@@ -1,0 +1,118 @@
+# =============================================================================
+# Sovereign Agent — ALL 5 features combined
+# =============================================================================
+# This is the ultimate agent: real-time cost intelligence, zk-proof verification,
+# governance tier 3, canary lifecycle, WASM sandbox, and eBPF policies.
+# One YAML to prove AgentK is unbeatable.
+#
+# Test:  kubectl apply -f examples/sovereign-agent.yaml
+# Check: kubectl get agent sovereign-agent -o wide
+# Proof: kubectl get agent sovereign-agent -o jsonpath='{.status.zkProofRoot}'
+# =============================================================================
+
+# 1. Tool sandbox (WASM isolation)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: ToolSandbox
+metadata:
+  name: sovereign-sandbox
+spec:
+  runtime: wasmedge
+  image: ghcr.io/agentic-layer/tool-sandbox:0.1.0
+  memoryLimitMB: 128
+  timeoutSeconds: 30
+  allowedHosts:
+    - "api.example.com"
+
+---
+
+# 2. Policy (eBPF + OPA enforcement)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: sovereign-policy
+spec:
+  type: hybrid
+  enforcement: enforcing
+  description: "Full sovereign policy: network + spend limit"
+  rules:
+    - name: network-egress
+      action: block
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+    - name: spend-limit
+      action: alert
+      opa:
+        rego: |
+          package agentk.spend
+          violation[msg] {
+            input.predicted_cost > input.max_cost
+            msg := sprintf("Predicted cost $%v exceeds budget $%v", [input.predicted_cost, input.max_cost])
+          }
+
+---
+
+# 3. The Sovereign Agent (all 5 moats active)
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: sovereign-agent
+  labels:
+    tier: sovereign
+spec:
+  framework: google-adk
+  description: "Sovereign AI Agent — verifiable, governed, cost-optimized, lifecycle-managed"
+  instruction: "You are a regulated financial advisor agent. Every action you take is cryptographically verified, cost-optimized in real time, and governed by autonomy tier 3."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 2
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+
+  # MOAT 1: Cost Budget + Real-time Cost Intelligence
+  costBudget:
+    maxMonthlyCostUSD: "100.00"
+    costPerTokenUSD: "0.00001"
+    downgradeModel: "gemini/gemini-2.0-flash-lite"
+  costIntelligence:
+    optimizationMode: auto
+    spotInstanceFallback: true
+    suspendOnBudgetExhaust: true
+    samplingIntervalSeconds: 30
+
+  # MOAT 2: Verifiable Execution (zk-proof chain)
+  verifiable:
+    enabled: true
+    proofMode: snark-groth16
+    proofRetentionDays: 90
+
+  # MOAT 3: Governance (autonomy tier 3)
+  governance:
+    autonomyLevel: 3
+    requirePolicyCompliance: true
+
+  # MOAT 4: Lifecycle Control (canary + self-healing)
+  lifecycle:
+    strategy: canary
+    promptVersion: "v1.0.0"
+    checkpointOnUpdate: true
+    gracefulShutdownSeconds: 60
+    selfHealing: true
+
+  # MOAT 5: WASM Sandbox + eBPF/OPA Policy
+  toolSandboxRef:
+    name: sovereign-sandbox
+  policyRefs:
+    - name: sovereign-policy
+
+# After applying, verify ALL sovereign features:
+#   kubectl get agent sovereign-agent -o wide
+#   kubectl get agent sovereign-agent -o jsonpath='{.status.zkProofRoot}'         # zk-proof chain
+#   kubectl get agent sovereign-agent -o jsonpath='{.status.attestationDigest}'   # attestation
+#   kubectl get agent sovereign-agent -o jsonpath='{.status.governanceStatus}'    # "compliant"
+#   kubectl get agent sovereign-agent -o jsonpath='{.status.lifecyclePhase}'      # "stable"
+#   kubectl get agent sovereign-agent -o jsonpath='{.status.predictedMonthlyCostUSD}' # cost

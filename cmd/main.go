@@ -21,6 +21,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
+	"time"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
@@ -40,7 +41,12 @@ import (
 
 	runtimev1alpha1 "github.com/agentic-layer/agent-runtime-operator/api/v1alpha1"
 	"github.com/agentic-layer/agent-runtime-operator/internal/controller"
+	"github.com/agentic-layer/agent-runtime-operator/internal/costintelligence"
+	"github.com/agentic-layer/agent-runtime-operator/internal/verifiable"
 	webhookv1alpha1 "github.com/agentic-layer/agent-runtime-operator/internal/webhook/v1alpha1"
+
+	// Blank import to trigger init() which registers all Prometheus metrics
+	_ "github.com/agentic-layer/agent-runtime-operator/internal/observability"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -209,9 +215,27 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Initialize real zk-SNARK/PlonK proof engine (gnark-based)
+	proofEngine := verifiable.NewProofEngine(setupLog.WithName("proof-engine"))
+	setupLog.Info("ProofEngine initialized — supports Groth16 (SNARK) and PlonK (Premium)")
+
+	// Initialize real-time cost monitor (background goroutine)
+	costMonitor := costintelligence.NewCostMonitor(
+		mgr.GetClient(),
+		setupLog,
+		60*time.Second,
+	)
+	if err := mgr.Add(costMonitor); err != nil {
+		setupLog.Error(err, "unable to add cost monitor to manager")
+		os.Exit(1)
+	}
+	setupLog.Info("Real-time CostMonitor registered — evaluates every 60s")
+
 	if err := (&controller.AgentReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:      mgr.GetClient(),
+		Scheme:      mgr.GetScheme(),
+		ProofEngine: proofEngine,
+		CostMonitor: costMonitor,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Agent")
 		os.Exit(1)
@@ -228,6 +252,41 @@ func main() {
 		Scheme: mgr.GetScheme(),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ToolServer")
+		os.Exit(1)
+	}
+	if err := (&controller.ToolSandboxReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ToolSandbox")
+		os.Exit(1)
+	}
+	if err := (&controller.PolicyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Policy")
+		os.Exit(1)
+	}
+	if err := (&controller.SimulationPreviewReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "SimulationPreview")
+		os.Exit(1)
+	}
+	if err := (&controller.SwarmReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "Swarm")
+		os.Exit(1)
+	}
+	if err := (&controller.ConfidentialAgentReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ConfidentialAgent")
 		os.Exit(1)
 	}
 	// nolint:goconst

@@ -1,0 +1,220 @@
+/*
+Copyright 2025.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package verifiable
+
+import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+	"math/big"
+	"sync"
+
+	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/ecc/bn254/fr/mimc"
+	"github.com/consensys/gnark/backend/groth16"
+	"github.com/consensys/gnark/constraint"
+	"github.com/consensys/gnark/frontend"
+	"github.com/consensys/gnark/frontend/cs/r1cs"
+)
+
+// SNARKProver handles Groth16 zero-knowledge proof generation and verification.
+// Groth16 is the most widely-used zk-SNARK scheme — it produces the smallest proofs
+// (~128 bytes) with the fastest verification time (~1ms). The trade-off is that it
+// requires a per-circuit trusted setup ceremony.
+type SNARKProver struct {
+	mu  sync.RWMutex
+	ccs constraint.ConstraintSystem
+	pk  groth16.ProvingKey
+	vk  groth16.VerifyingKey
+}
+
+// SNARKProof contains the generated proof and public signals.
+type SNARKProof struct {
+	// ProofBytes is the serialized Groth16 proof.
+	ProofBytes []byte
+	// PublicInputHash is the MiMC hash of the public inputs for quick comparison.
+	PublicInputHash string
+	// Verified indicates whether the proof was self-verified after generation.
+	Verified bool
+}
+
+// NewSNARKProver creates a new Groth16 prover by compiling the circuit and
+// running the trusted setup. This is called once at operator startup.
+// The trusted setup generates a proving key (pk) and verifying key (vk).
+func NewSNARKProver() (*SNARKProver, error) {
+	// Compile the ProofChainCircuit into an R1CS constraint system
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &ProofChainCircuit{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to compile SNARK circuit: %w", err)
+	}
+
+	// Run Groth16 trusted setup — generates proving key and verifying key
+	pk, vk, err := groth16.Setup(ccs)
+	if err != nil {
+		return nil, fmt.Errorf("failed to run Groth16 setup: %w", err)
+	}
+
+	return &SNARKProver{
+		ccs: ccs,
+		pk:  pk,
+		vk:  vk,
+	}, nil
+}
+
+// GenerateProof creates a real Groth16 zero-knowledge proof.
+// The proof proves that the prover knows secretInput such that
+// MiMC(previousProof || secretInput || stepIndex) == expectedOutput,
+// without revealing secretInput to anyone.
+func (s *SNARKProver) GenerateProof(previousProof, secretInput string, stepIndex int) (*SNARKProof, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Compute the expected output using MiMC hash
+	expectedOutput := computeMiMCHash(previousProof, secretInput, stepIndex)
+
+	// Convert inputs to field elements
+	prevBig := stringToBigInt(previousProof)
+	secretBig := stringToBigInt(secretInput)
+	expectedBig := new(big.Int).SetBytes(expectedOutput)
+
+	// Create the witness (assignment of values to circuit variables)
+	assignment := &ProofChainCircuit{
+		PreviousProof:  prevBig,
+		StepIndex:      stepIndex,
+		ExpectedOutput: expectedBig,
+		SecretInput:    secretBig,
+	}
+
+	// Create the full witness (includes both public and private inputs)
+	witness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField())
+	if err != nil {
+		return nil, fmt.Errorf("failed to create witness: %w", err)
+	}
+
+	// Generate the Groth16 proof
+	proof, err := groth16.Prove(s.ccs, s.pk, witness)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate Groth16 proof: %w", err)
+	}
+
+	// Serialize the proof
+	var proofBuf bytes.Buffer
+	_, err = proof.WriteTo(&proofBuf)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize proof: %w", err)
+	}
+
+	// Self-verify the proof to ensure correctness
+	publicWitness, err := witness.Public()
+	if err != nil {
+		return nil, fmt.Errorf("failed to extract public witness: %w", err)
+	}
+
+	verified := groth16.Verify(proof, s.vk, publicWitness) == nil
+
+	return &SNARKProof{
+		ProofBytes:      proofBuf.Bytes(),
+		PublicInputHash: hex.EncodeToString(expectedOutput),
+		Verified:        verified,
+	}, nil
+}
+
+// VerifyProof verifies a previously generated Groth16 proof against public inputs.
+func (s *SNARKProver) VerifyProof(proofBytes []byte, previousProof string, stepIndex int, expectedOutputHex string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Deserialize the proof
+	proof := groth16.NewProof(ecc.BN254)
+	_, err := proof.ReadFrom(bytes.NewReader(proofBytes))
+	if err != nil {
+		return false, fmt.Errorf("failed to deserialize proof: %w", err)
+	}
+
+	// Reconstruct public inputs
+	expectedBytes, err := hex.DecodeString(expectedOutputHex)
+	if err != nil {
+		return false, fmt.Errorf("failed to decode expected output: %w", err)
+	}
+
+	assignment := &ProofChainCircuit{
+		PreviousProof:  stringToBigInt(previousProof),
+		StepIndex:      stepIndex,
+		ExpectedOutput: new(big.Int).SetBytes(expectedBytes),
+	}
+
+	publicWitness, err := frontend.NewWitness(assignment, ecc.BN254.ScalarField(), frontend.PublicOnly())
+	if err != nil {
+		return false, fmt.Errorf("failed to create public witness: %w", err)
+	}
+
+	// Verify the proof
+	err = groth16.Verify(proof, s.vk, publicWitness)
+	return err == nil, nil
+}
+
+// GetVerifyingKeyBytes serializes the verifying key for external distribution.
+func (s *SNARKProver) GetVerifyingKeyBytes() ([]byte, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var buf bytes.Buffer
+	_, err := s.vk.WriteTo(&buf)
+	if err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// computeMiMCHash computes MiMC(previousProof || secretInput || stepIndex) using gnark-crypto.
+// Each input is left-padded to exactly 32 bytes (one BN254 field element) to match
+// the gnark circuit's MiMC which operates on full field elements.
+func computeMiMCHash(previousProof, secretInput string, stepIndex int) []byte {
+	h := mimc.NewMiMC()
+	h.Write(toFieldBytes(stringToBigInt(previousProof)))
+	h.Write(toFieldBytes(stringToBigInt(secretInput)))
+	h.Write(toFieldBytes(big.NewInt(int64(stepIndex))))
+	return h.Sum(nil)
+}
+
+// toFieldBytes converts a big.Int to exactly 32 bytes (BN254 field element size),
+// left-padded with zeros. This matches how gnark circuit MiMC treats Write() calls.
+func toFieldBytes(v *big.Int) []byte {
+	b := v.Bytes()
+	if len(b) >= 32 {
+		return b[:32]
+	}
+	padded := make([]byte, 32)
+	copy(padded[32-len(b):], b)
+	return padded
+}
+
+// stringToBigInt converts a hex string or plain string to a big.Int for field element use.
+func stringToBigInt(s string) *big.Int {
+	if s == "" {
+		return big.NewInt(0)
+	}
+	// Try hex decoding first
+	b, err := hex.DecodeString(s)
+	if err == nil && len(b) > 0 {
+		return new(big.Int).SetBytes(b)
+	}
+	// Fall back to hashing the string to get a field element
+	h := mimc.NewMiMC()
+	h.Write([]byte(s))
+	return new(big.Int).SetBytes(h.Sum(nil))
+}

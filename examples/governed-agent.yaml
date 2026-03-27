@@ -1,0 +1,69 @@
+# =============================================================================
+# Governed Agent — Autonomy tier 2 with human-in-loop
+# =============================================================================
+# This agent requires human approval (autonomy level 2) and full policy compliance.
+# Perfect for regulated environments (finance, healthcare, government).
+#
+# Test:  kubectl apply -f examples/governed-agent.yaml
+# Check: kubectl get agent governed-agent -o wide
+# =============================================================================
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: governance-policy
+spec:
+  type: opa
+  enforcement: enforcing
+  description: "Governance policy for regulated agents"
+  rules:
+    - name: output-review
+      action: audit
+      opa:
+        rego: |
+          package agentk.governance
+          violation[msg] {
+            input.autonomy_level < 3
+            not input.human_approved
+            msg := "Human approval required for autonomy level < 3"
+          }
+
+---
+
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Agent
+metadata:
+  name: governed-agent
+  labels:
+    regulated: "true"
+spec:
+  framework: google-adk
+  description: "Regulated agent with human-in-loop governance"
+  instruction: "You are a compliance-focused agent. Every major decision requires human approval. Always cite your sources and provide audit trails."
+  model: "gemini/gemini-2.5-flash"
+  protocols:
+    - type: A2A
+  replicas: 1
+  env:
+    - name: GEMINI_API_KEY
+      value: "your-api-key-here"
+
+  # Governance: autonomy level 2 = human approval required
+  governance:
+    autonomyLevel: 2
+    humanApprovalWebhook: "https://approval.example.com/webhook"
+    requirePolicyCompliance: true
+
+  # Reference the governance policy
+  policyRefs:
+    - name: governance-policy
+
+  # Verifiable: full proof chain for audit
+  verifiable:
+    enabled: true
+    proofMode: sha3-attestation
+    proofRetentionDays: 365
+
+# After applying:
+#   kubectl get agent governed-agent -o wide
+#     GOVERNANCE         LIFECYCLE
+#     pending-approval   stable

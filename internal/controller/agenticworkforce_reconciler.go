@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	runtimev1alpha1 "github.com/agentic-layer/agent-runtime-operator/api/v1alpha1"
+	"github.com/agentic-layer/agent-runtime-operator/internal/observability"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -101,6 +102,10 @@ func (r *AgenticWorkforceReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	log.Info("Successfully reconciled AgenticWorkforce",
 		"transitiveAgents", len(transitiveAgents),
 		"transitiveTools", len(transitiveTools))
+
+	// Record metrics
+	observability.WorkforceTransitiveAgentsGauge.WithLabelValues(workforce.Name, workforce.Namespace).Set(float64(len(transitiveAgents)))
+	observability.WorkforceTransitiveToolsGauge.WithLabelValues(workforce.Name, workforce.Namespace).Set(float64(len(transitiveTools)))
 
 	return ctrl.Result{}, nil
 }

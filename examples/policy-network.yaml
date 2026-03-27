@@ -1,0 +1,55 @@
+# Policy: Network Egress Control via hybrid eBPF + OPA
+#
+# This hybrid policy combines eBPF for kernel-level network filtering
+# with OPA for application-level URL allowlisting.
+apiVersion: runtime.agentic-layer.ai/v1alpha1
+kind: Policy
+metadata:
+  name: network-egress-control
+spec:
+  type: hybrid
+  enforcement: enforcing
+  description: "Controls agent network access using eBPF filtering and OPA URL policies"
+  rules:
+    - name: kernel-network-filter
+      action: block
+      ebpf:
+        program: network-egress
+        allowedCIDRs:
+          - "10.0.0.0/8"
+          - "172.16.0.0/12"
+          - "192.168.0.0/16"
+        deniedPorts:
+          - 22     # SSH
+          - 3389   # RDP
+          - 445    # SMB
+    - name: url-allowlist
+      action: block
+      opa:
+        rego: |
+          package agentk.network
+
+          default allow := false
+
+          # Only allow requests to approved domains
+          allowed_domains := {
+            "api.openai.com",
+            "api.anthropic.com",
+            "generativelanguage.googleapis.com"
+          }
+
+          allow {
+            some domain in allowed_domains
+            endswith(input.request_host, domain)
+          }
+
+          deny[msg] {
+            not allow
+            msg := sprintf("Blocked request to unapproved host: %s", [input.request_host])
+          }
+    - name: block-file-access
+      action: audit
+      ebpf:
+        program: file-access
+        deniedSyscalls:
+          - "open_sensitive_paths"

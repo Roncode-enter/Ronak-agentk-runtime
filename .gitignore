@@ -33,3 +33,15 @@ go.work.sum
 
 # Binary output
 bin/
+
+# Node.js
+node_modules/
+web-dashboard/frontend/node_modules/
+
+# Claude Code local config
+.claude/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
