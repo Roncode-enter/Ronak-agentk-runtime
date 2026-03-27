@@ -151,8 +151,14 @@ func handleAttest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Encode signature as hex (r || s, each 32 bytes)
-	sigBytes := append(sigR.Bytes(), sigS.Bytes()...)
+	// Encode signature as hex (r || s, each padded to exactly 32 bytes)
+	rBytes := make([]byte, 32)
+	sBytes := make([]byte, 32)
+	sigRBytes := sigR.Bytes()
+	sigSBytes := sigS.Bytes()
+	copy(rBytes[32-len(sigRBytes):], sigRBytes)
+	copy(sBytes[32-len(sigSBytes):], sigSBytes)
+	sigBytes := append(rBytes, sBytes...)
 	signature := hex.EncodeToString(sigBytes)
 
 	// Encode public key as PEM
@@ -188,13 +194,14 @@ func computeMeasurements(agentName string) string {
 }
 
 // verifySignature verifies an ECDSA signature (exported for testing).
+// Expects hex-encoded r||s, each component exactly 32 bytes (64 bytes total).
 func verifySignature(pubKey *ecdsa.PublicKey, data []byte, sigHex string) bool {
 	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) < 64 {
+	if err != nil || len(sigBytes) != 64 {
 		return false
 	}
 	hash := sha256.Sum256(data)
 	r := new(big.Int).SetBytes(sigBytes[:32])
-	s := new(big.Int).SetBytes(sigBytes[32:])
+	s := new(big.Int).SetBytes(sigBytes[32:64])
 	return ecdsa.Verify(pubKey, hash[:], r, s)
 }

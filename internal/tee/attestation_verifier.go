@@ -172,14 +172,15 @@ func parsePublicKey(pemStr string) (*ecdsa.PublicKey, error) {
 }
 
 // verifyECDSASignature verifies an ECDSA signature over data.
+// Expects signature as hex-encoded r||s where each component is exactly 32 bytes (64 bytes total).
 func verifyECDSASignature(pubKey *ecdsa.PublicKey, data []byte, sigHex string) bool {
 	sigBytes, err := hex.DecodeString(sigHex)
-	if err != nil || len(sigBytes) < 64 {
+	if err != nil || len(sigBytes) != 64 {
 		return false
 	}
 	hash := sha256.Sum256(data)
 	r := new(big.Int).SetBytes(sigBytes[:32])
-	s := new(big.Int).SetBytes(sigBytes[32:])
+	s := new(big.Int).SetBytes(sigBytes[32:64])
 	return ecdsa.Verify(pubKey, hash[:], r, s)
 }
 
