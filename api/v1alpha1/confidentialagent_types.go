@@ -81,6 +81,24 @@ type ConfidentialAgentSpec struct {
 	// +kubebuilder:validation:Minimum=30
 	// +kubebuilder:validation:Maximum=3600
 	AttestationIntervalSeconds int32 `json:"attestationIntervalSeconds,omitempty"`
+
+	// AttestationPublicKeySecretRef references a Kubernetes Secret containing the pre-configured
+	// public key used to verify attestation signatures. The Secret must contain a PEM-encoded
+	// ECDSA P-256 public key in a key named "publicKey".
+	//
+	// When set, the operator uses this pre-configured key as the root of trust instead of
+	// accepting the public key from the attestation response itself (which would be self-signed).
+	// This is REQUIRED for production deployments to establish a hardware-rooted trust anchor.
+	//
+	// Example Secret:
+	//   apiVersion: v1
+	//   kind: Secret
+	//   metadata:
+	//     name: attestation-pubkey
+	//   data:
+	//     publicKey: <base64-encoded PEM public key>
+	// +optional
+	AttestationPublicKeySecretRef *corev1.SecretReference `json:"attestationPublicKeySecretRef,omitempty"`
 }
 
 // ConfidentialAgentStatus defines the observed state of ConfidentialAgent.

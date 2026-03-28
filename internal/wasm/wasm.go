@@ -34,6 +34,10 @@ const (
 
 // BuildSidecarContainer creates a container spec for a WasmEdge sidecar
 // that runs alongside the agent to provide sandboxed tool execution.
+//
+// The sidecar pulls the WASM module from the configured image, then executes it
+// using the WasmEdge runtime with network isolation, memory limits, and timeout controls.
+// The module is expected to expose an HTTP server on the configured port for tool invocations.
 func BuildSidecarContainer(sandbox *runtimev1alpha1.ToolSandbox) corev1.Container {
 	memoryLimit := fmt.Sprintf("%dMi", sandbox.Spec.MemoryLimitMB)
 
@@ -54,9 +58,50 @@ func BuildSidecarContainer(sandbox *runtimev1alpha1.ToolSandbox) corev1.Containe
 	}
 	env = append(env, sandbox.Spec.Env...)
 
+	// Build the wasmedge command with proper sandboxing flags.
+	// The entrypoint script:
+	// 1. Downloads/copies the WASM module from the configured image path
+	// 2. Starts wasmedge with network allowlist, memory limits, and timeout
+	// 3. The module is expected to listen on the configured port
+	allowedHostsFlag := ""
+	if len(sandbox.Spec.AllowedHosts) > 0 {
+		allowedHostsFlag = fmt.Sprintf("--allow-dns=%s", strings.Join(sandbox.Spec.AllowedHosts, ","))
+	}
+
+	startScript := fmt.Sprintf(`set -e
+MODULE_PATH="/wasm/module.wasm"
+
+# If WASM_MODULE_IMAGE is a URL, download it; otherwise expect it at the module path
+if echo "$WASM_MODULE_IMAGE" | grep -qE '^https?://'; then
+  echo "Downloading WASM module from $WASM_MODULE_IMAGE"
+  wget -q -O "$MODULE_PATH" "$WASM_MODULE_IMAGE" || { echo "ERROR: Failed to download WASM module"; exit 1; }
+elif [ -f "$WASM_MODULE_IMAGE" ]; then
+  cp "$WASM_MODULE_IMAGE" "$MODULE_PATH"
+elif [ -f "/wasm/module.wasm" ]; then
+  echo "Using pre-mounted WASM module"
+else
+  echo "ERROR: No WASM module found at $WASM_MODULE_IMAGE or /wasm/module.wasm"
+  exit 1
+fi
+
+echo "Starting WasmEdge runtime (port=%d, timeout=%ds, memory=%dMB)"
+exec wasmedge \
+  --dir /tmp:/tmp \
+  --env LISTEN_PORT=%d \
+  --env TIMEOUT_SECONDS=%d \
+  %s \
+  "$MODULE_PATH"
+`, sandbox.Spec.Port, sandbox.Spec.TimeoutSeconds, sandbox.Spec.MemoryLimitMB,
+		sandbox.Spec.Port, sandbox.Spec.TimeoutSeconds, allowedHostsFlag)
+
 	return corev1.Container{
 		Name:  sidecarContainerName,
 		Image: wasmEdgeImage,
+		Command: []string{
+			"/bin/sh",
+			"-c",
+			startScript,
+		},
 		Ports: []corev1.ContainerPort{
 			{
 				ContainerPort: sandbox.Spec.Port,
@@ -64,6 +109,12 @@ func BuildSidecarContainer(sandbox *runtimev1alpha1.ToolSandbox) corev1.Containe
 			},
 		},
 		Env: env,
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      "wasm-module",
+				MountPath: "/wasm",
+			},
+		},
 		Resources: corev1.ResourceRequirements{
 			Limits: corev1.ResourceList{
 				corev1.ResourceMemory: resource.MustParse(memoryLimit),
@@ -81,6 +132,16 @@ func BuildSidecarContainer(sandbox *runtimev1alpha1.ToolSandbox) corev1.Containe
 			},
 			InitialDelaySeconds: 5,
 			PeriodSeconds:       10,
+		},
+	}
+}
+
+// BuildWASMModuleVolume returns an emptyDir volume for staging the WASM module.
+func BuildWASMModuleVolume() corev1.Volume {
+	return corev1.Volume{
+		Name: "wasm-module",
+		VolumeSource: corev1.VolumeSource{
+			EmptyDir: &corev1.EmptyDirVolumeSource{},
 		},
 	}
 }

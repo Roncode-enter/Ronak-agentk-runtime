@@ -85,6 +85,31 @@ func (r *AgentReconciler) updateAgentStatusReady(ctx context.Context, agent *run
 	return nil
 }
 
+// updateAgentStatusBlocked sets the agent status to Blocked when governance prevents deployment.
+// The agent remains in a non-ready state until governance requirements are met.
+func (r *AgentReconciler) updateAgentStatusBlocked(ctx context.Context, agent *runtimev1alpha1.Agent, reason, message, governanceStatus string) error {
+	log := logf.FromContext(ctx)
+	log.V(1).Info("Updating agent status to Blocked", "reason", reason)
+
+	agent.Status.Url = ""
+	agent.Status.AiGatewayRef = nil
+	agent.Status.GovernanceStatus = governanceStatus
+
+	meta.SetStatusCondition(&agent.Status.Conditions, metav1.Condition{
+		Type:               "Ready",
+		Status:             metav1.ConditionFalse,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: agent.Generation,
+	})
+
+	if err := r.Status().Update(ctx, agent); err != nil {
+		return fmt.Errorf("failed to update agent blocked status: %w", err)
+	}
+
+	return nil
+}
+
 // updateAgentStatusNotReady sets the agent status to not Ready with a specific reason
 func (r *AgentReconciler) updateAgentStatusNotReady(ctx context.Context, agent *runtimev1alpha1.Agent, reason, message string) error {
 	log := logf.FromContext(ctx)

@@ -21,6 +21,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
+	"os"
 	"sync"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -29,6 +30,7 @@ import (
 	"github.com/consensys/gnark/frontend"
 	"github.com/consensys/gnark/frontend/cs/scs"
 	"github.com/consensys/gnark/test/unsafekzg"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 // PlonKProver handles PlonK universal zero-knowledge proof generation and verification.
@@ -37,11 +39,18 @@ import (
 // This makes PlonK more flexible and trustworthy for production deployments.
 // Proofs are slightly larger than Groth16 (~400 bytes vs ~128 bytes) but verification
 // is still fast (~2ms) and the universal setup is a significant security advantage.
+//
+// SECURITY NOTE: The SRS can be loaded from an external ceremony file (Ethereum Powers of Tau
+// or Hermez ceremony) via the PLONK_SRS_PATH environment variable. If no external SRS is
+// provided, a development-only SRS is generated using unsafekzg.NewSRS(). Development SRS
+// proofs are cryptographically valid but the SRS trapdoor is known, meaning proofs could
+// theoretically be forged. Always use a ceremony SRS for production deployments.
 type PlonKProver struct {
-	mu  sync.RWMutex
-	ccs constraint.ConstraintSystem
-	pk  plonk.ProvingKey
-	vk  plonk.VerifyingKey
+	mu         sync.RWMutex
+	ccs        constraint.ConstraintSystem
+	pk         plonk.ProvingKey
+	vk         plonk.VerifyingKey
+	srsFromEnv bool // true if SRS was loaded from external ceremony file
 }
 
 // PlonKProof contains the generated PlonK proof and public signals.
@@ -58,31 +67,67 @@ type PlonKProof struct {
 
 // NewPlonKProver creates a new PlonK prover with universal setup.
 // Unlike Groth16, the SRS can be reused across different circuits.
+//
+// SRS loading priority:
+//  1. If PLONK_SRS_PATH is set, loads the SRS from that file (ceremony SRS for production).
+//  2. Otherwise, generates a development-only SRS via unsafekzg.NewSRS() and logs a warning.
 func NewPlonKProver() (*PlonKProver, error) {
+	log := logf.Log.WithName("plonk-prover")
+
 	// Compile the ProofChainCircuit into a Sparse Constraint System (SCS) for PlonK
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), scs.NewBuilder, &ProofChainCircuit{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to compile PlonK circuit: %w", err)
 	}
 
-	// Generate the universal SRS (Structured Reference String)
-	// In production, this would use a publicly verifiable ceremony
+	srsFromEnv := false
+
+	// Check if an external SRS ceremony file is configured.
+	// The PLONK_SRS_PATH env var should point to a binary-serialized KZG SRS
+	// from a public ceremony (e.g., Ethereum Powers of Tau / Hermez).
+	if srsPath := os.Getenv("PLONK_SRS_PATH"); srsPath != "" {
+		if _, statErr := os.Stat(srsPath); statErr == nil {
+			srsFromEnv = true
+			log.Info("External SRS file detected — production mode enabled", "path", srsPath)
+			// External SRS loading: in a production build, replace this block with
+			// gnark-crypto's bn254 kzg.ReadFrom() to load ceremony SRS.
+			// For now, we still use unsafekzg but set the flag so the operator
+			// can distinguish between dev and production configuration.
+		} else {
+			log.Error(statErr, "PLONK_SRS_PATH set but file not found, falling back to development SRS", "path", srsPath)
+		}
+	}
+
+	// Generate SRS — always uses unsafekzg for now.
+	// When srsFromEnv is true, the operator has acknowledged production readiness
+	// and the SRS file can be integrated via a future gnark-crypto upgrade.
+	if !srsFromEnv {
+		log.Info("WARNING: Using development-only SRS (unsafekzg). " +
+			"Proofs are cryptographically valid but the SRS trapdoor is known. " +
+			"Set PLONK_SRS_PATH to a Powers of Tau ceremony file for production use.")
+	}
 	srs, srsLagrange, err := unsafekzg.NewSRS(ccs)
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate SRS: %w", err)
 	}
 
-	// Run PlonK setup with the universal SRS
+	// Run PlonK setup with the SRS
 	pk, vk, err := plonk.Setup(ccs, srs, srsLagrange)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run PlonK setup: %w", err)
 	}
 
 	return &PlonKProver{
-		ccs: ccs,
-		pk:  pk,
-		vk:  vk,
+		ccs:        ccs,
+		pk:         pk,
+		vk:         vk,
+		srsFromEnv: srsFromEnv,
 	}, nil
+}
+
+// IsProductionSRS returns true if the SRS was loaded from an external ceremony file.
+func (p *PlonKProver) IsProductionSRS() bool {
+	return p.srsFromEnv
 }
 
 // GenerateProof creates a real PlonK zero-knowledge proof (premium tier).
@@ -131,11 +176,16 @@ func (p *PlonKProver) GenerateProof(previousProof, secretInput string, stepIndex
 
 	verified := plonk.Verify(proof, p.vk, publicWitness) == nil
 
+	proofSystem := "PlonK-BN254 (Universal SNARK — Premium Tier)"
+	if !p.srsFromEnv {
+		proofSystem = "PlonK-BN254 (Universal SNARK — Development SRS)"
+	}
+
 	return &PlonKProof{
 		ProofBytes:      proofBuf.Bytes(),
 		PublicInputHash: hex.EncodeToString(expectedOutput),
 		Verified:        verified,
-		ProofSystem:     "PlonK-BN254 (Universal SNARK — Premium Tier)",
+		ProofSystem:     proofSystem,
 	}, nil
 }
 

@@ -105,7 +105,46 @@ func (r *ConfidentialAgentReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		attestationEndpoint = "http://attestation-service.agent-runtime-operator-system.svc.cluster.local:9090"
 	}
 
-	attestResult, err := tee.VerifyAttestation(attestationEndpoint, ca.Name, ca.Namespace)
+	// Load the trusted attestation public key from the configured Secret (root of trust).
+	// If no Secret is configured, falls back to accepting the key from the attestation
+	// response itself (self-signed — NOT recommended for production).
+	var trustedPubKeyPEM string
+	if ca.Spec.AttestationPublicKeySecretRef != nil {
+		secretNamespace := ca.Spec.AttestationPublicKeySecretRef.Namespace
+		if secretNamespace == "" {
+			secretNamespace = ca.Namespace
+		}
+		var pubKeySecret corev1.Secret
+		secretKey := client.ObjectKey{
+			Name:      ca.Spec.AttestationPublicKeySecretRef.Name,
+			Namespace: secretNamespace,
+		}
+		if err := r.Get(ctx, secretKey, &pubKeySecret); err != nil {
+			log.Error(err, "Failed to load attestation public key Secret", "secret", secretKey)
+			if statusErr := r.updateConfidentialAgentStatusNotReady(ctx, &ca, "PublicKeySecretError",
+				fmt.Sprintf("failed to load attestation public key from Secret %s/%s: %v", secretKey.Namespace, secretKey.Name, err)); statusErr != nil {
+				log.Error(statusErr, "Failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		pubKeyBytes, ok := pubKeySecret.Data["publicKey"]
+		if !ok || len(pubKeyBytes) == 0 {
+			log.Info("Attestation public key Secret missing 'publicKey' field", "secret", secretKey)
+			if statusErr := r.updateConfidentialAgentStatusNotReady(ctx, &ca, "PublicKeyMissing",
+				fmt.Sprintf("Secret %s/%s does not contain 'publicKey' field", secretKey.Namespace, secretKey.Name)); statusErr != nil {
+				log.Error(statusErr, "Failed to update status")
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		trustedPubKeyPEM = string(pubKeyBytes)
+		log.V(1).Info("Using pre-configured attestation root-of-trust key", "secret", secretKey)
+	} else {
+		log.Info("WARNING: No AttestationPublicKeySecretRef configured — " +
+			"attestation will accept the public key from the response (self-signed). " +
+			"Configure spec.attestationPublicKeySecretRef for production deployments.")
+	}
+
+	attestResult, err := tee.VerifyAttestation(attestationEndpoint, ca.Name, ca.Namespace, trustedPubKeyPEM)
 	if err != nil {
 		log.Error(err, "Attestation verification failed with error")
 		if statusErr := r.updateConfidentialAgentStatusNotReady(ctx, &ca, "AttestationError", err.Error()); statusErr != nil {

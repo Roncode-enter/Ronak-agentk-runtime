@@ -91,6 +91,12 @@ type SwarmSpec struct {
 	// +kubebuilder:validation:Maximum=300
 	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
 
+	// CoordinatorImage is the container image for the swarm coordinator pod.
+	// The coordinator routes A2A requests between agents according to the swarm strategy.
+	// If not set, defaults to the operator's built-in default image.
+	// +optional
+	CoordinatorImage string `json:"coordinatorImage,omitempty"`
+
 	// CoordinatorPort is the port the coordinator service listens on.
 	// +optional
 	// +kubebuilder:default=8080

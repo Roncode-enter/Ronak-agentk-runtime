@@ -221,7 +221,9 @@ func BuildAttestationReport(
 	}
 	data, err := json.Marshal(report)
 	if err != nil {
-		return "{}"
+		// Return a valid JSON error report instead of empty object
+		return fmt.Sprintf(`{"error":"failed to marshal attestation report: %s","agentName":"%s","namespace":"%s"}`,
+			err.Error(), agentName, namespace)
 	}
 	return string(data)
 }

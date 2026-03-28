@@ -201,7 +201,7 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 		log.V(1).Info("Proof generated", "mode", agent.Spec.Verifiable.ProofMode, "algorithm", proofAlgorithm)
 	}
 
-	// Evaluate governance
+	// Evaluate governance — if the decision is not Allowed, block the deployment
 	var governanceStatus string
 	if agent.Spec.Governance != nil {
 		decision := governance.EvaluateGovernance(
@@ -211,6 +211,17 @@ func (r *AgentReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl
 			agent.Spec.Governance.RequirePolicyCompliance,
 		)
 		governanceStatus = decision.Status
+
+		if !decision.Allowed {
+			log.Info("Governance blocks deployment", "status", decision.Status, "reason", decision.Reason,
+				"requiresHumanApproval", decision.RequiresHumanApproval)
+			if statusErr := r.updateAgentStatusBlocked(ctx, &agent, "GovernanceBlocked", decision.Reason, governanceStatus); statusErr != nil {
+				log.Error(statusErr, "Failed to update blocked status")
+			}
+			observability.GovernanceComplianceGauge.WithLabelValues(agent.Name, agent.Namespace).Set(0)
+			// Requeue to check again later (human approval or policy fix may unblock)
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 	}
 
 	// Evaluate real-time cost intelligence — uses CostMonitor background goroutine

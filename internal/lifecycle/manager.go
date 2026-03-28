@@ -28,9 +28,26 @@ import (
 )
 
 // ConfigureDeploymentStrategy maps agent lifecycle strategy to a Kubernetes DeploymentStrategy.
-//   - "rolling": RollingUpdate with configurable maxSurge/maxUnavailable
-//   - "canary": RollingUpdate with maxSurge=1, maxUnavailable=0 (one new pod at a time)
-//   - "blue-green": Recreate (all old pods replaced at once)
+//
+// These strategies use native Kubernetes Deployment primitives:
+//
+//   - "rolling": Standard RollingUpdate with configurable maxSurge/maxUnavailable.
+//     This is the default strategy and provides zero-downtime rolling updates.
+//
+//   - "canary": Implemented as RollingUpdate with maxSurge=1 and maxUnavailable=0.
+//     This introduces exactly one new pod at a time while keeping all existing pods running,
+//     providing a canary-style gradual rollout using Kubernetes-native mechanisms.
+//     NOTE: This is NOT a traffic-splitting canary (which would require a service mesh like
+//     Istio or Linkerd). It is a pod-level rollout strategy. For traffic-percentage-based
+//     canary deployments, use a service mesh with the Agent's Deployment directly.
+//
+//   - "blue-green": Implemented as Recreate strategy, which terminates all old pods before
+//     creating new ones. This provides a clean cut-over between versions.
+//     NOTE: This is NOT a true blue-green deployment (which maintains two full environments
+//     and switches traffic atomically). True blue-green requires two Deployments and a Service
+//     selector switch, which the operator may support in a future release. The current
+//     implementation ensures version isolation (no mixed versions running simultaneously)
+//     at the cost of brief downtime during the switchover.
 func ConfigureDeploymentStrategy(strategy string, maxSurge string, maxUnavailable string) appsv1.DeploymentStrategy {
 	switch strategy {
 	case "canary":
@@ -61,10 +78,21 @@ func ConfigureDeploymentStrategy(strategy string, maxSurge string, maxUnavailabl
 }
 
 // BuildLifecycleAnnotations returns pod annotations for lifecycle metadata.
+// Includes the user-facing strategy name and the actual Kubernetes implementation used.
 func BuildLifecycleAnnotations(strategy string, promptVersion string, checkpointOnUpdate bool) map[string]string {
+	// Map user-facing strategy to the actual Kubernetes implementation
+	k8sStrategy := "RollingUpdate"
+	switch strategy {
+	case "canary":
+		k8sStrategy = "RollingUpdate (maxSurge=1, maxUnavailable=0)"
+	case "blue-green":
+		k8sStrategy = "Recreate"
+	}
+
 	annotations := map[string]string{
-		"agentk.io/lifecycle-strategy":   strategy,
-		"agentk.io/checkpoint-on-update": fmt.Sprintf("%t", checkpointOnUpdate),
+		"agentk.io/lifecycle-strategy":    strategy,
+		"agentk.io/k8s-strategy-impl":    k8sStrategy,
+		"agentk.io/checkpoint-on-update":  fmt.Sprintf("%t", checkpointOnUpdate),
 	}
 	if promptVersion != "" {
 		annotations["agentk.io/prompt-version"] = promptVersion

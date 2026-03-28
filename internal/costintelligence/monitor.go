@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -99,6 +101,14 @@ func (m *CostMonitor) evaluate(ctx context.Context) {
 
 		key := types.NamespacedName{Name: agent.Name, Namespace: agent.Namespace}
 
+		// Read actual token usage from pod annotations.
+		// Agent runtimes report token counts via the annotation "agentk.io/tokens-used"
+		// on their pods. This is the primary mechanism for real token tracking.
+		tokensUsed := agent.Status.TokensUsed
+		if tokensUsed == 0 {
+			tokensUsed = m.readTokensFromPods(ctx, agent)
+		}
+
 		// Parse cost parameters
 		costPerToken, _ := strconv.ParseFloat(agent.Spec.CostBudget.CostPerTokenUSD, 64)
 		maxMonthlyCost, _ := strconv.ParseFloat(agent.Spec.CostBudget.MaxMonthlyCostUSD, 64)
@@ -117,7 +127,7 @@ func (m *CostMonitor) evaluate(ctx context.Context) {
 		}
 
 		decision := EvaluateRealTimeCost(
-			agent.Status.TokensUsed,
+			tokensUsed,
 			uptimeSeconds,
 			costPerToken,
 			maxMonthlyCost,
@@ -134,4 +144,31 @@ func (m *CostMonitor) evaluate(ctx context.Context) {
 	if evaluated > 0 {
 		m.Log.V(1).Info("Cost evaluation complete", "agentsEvaluated", evaluated)
 	}
+}
+
+// readTokensFromPods reads token usage from agent pod annotations.
+// Agent runtimes are expected to report token counts via the annotation "agentk.io/tokens-used".
+// This aggregates token counts across all pods matching the agent's app label.
+func (m *CostMonitor) readTokensFromPods(ctx context.Context, agent *runtimev1alpha1.Agent) int64 {
+	var podList corev1.PodList
+	labelSelector := labels.SelectorFromSet(labels.Set{"app": agent.Name})
+	if err := m.Client.List(ctx, &podList,
+		client.InNamespace(agent.Namespace),
+		client.MatchingLabelsSelector{Selector: labelSelector},
+	); err != nil {
+		m.Log.V(2).Info("Failed to list pods for token counting", "agent", agent.Name, "error", err)
+		return 0
+	}
+
+	var totalTokens int64
+	for _, pod := range podList.Items {
+		if val, ok := pod.Annotations["agentk.io/tokens-used"]; ok {
+			tokens, err := strconv.ParseInt(val, 10, 64)
+			if err == nil {
+				totalTokens += tokens
+			}
+		}
+	}
+
+	return totalTokens
 }

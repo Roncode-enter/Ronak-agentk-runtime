@@ -33,8 +33,9 @@ const (
 	// CoordinatorContainerName is the name of the coordinator container in the pod.
 	CoordinatorContainerName = "swarm-coordinator"
 
-	// CoordinatorImage is the default image for the swarm coordinator.
-	CoordinatorImage = "ghcr.io/agentic-layer/swarm-coordinator:0.1.0"
+	// DefaultCoordinatorImage is the default image for the swarm coordinator.
+	// Override per-Swarm via spec.coordinatorImage.
+	DefaultCoordinatorImage = "ghcr.io/agentic-layer/swarm-coordinator:0.1.0"
 
 	// ConfigVolumeName is the name of the ConfigMap volume mount.
 	ConfigVolumeName = "swarm-config"
@@ -99,13 +100,22 @@ func BuildCoordinatorConfig(swarm *runtimev1alpha1.Swarm, agentUrls map[string]s
 	return string(data)
 }
 
+// GetCoordinatorImage returns the coordinator image for the given swarm,
+// falling back to the default if not specified.
+func GetCoordinatorImage(swarm *runtimev1alpha1.Swarm) string {
+	if swarm.Spec.CoordinatorImage != "" {
+		return swarm.Spec.CoordinatorImage
+	}
+	return DefaultCoordinatorImage
+}
+
 // BuildCoordinatorContainer creates the container spec for the coordinator pod.
 func BuildCoordinatorContainer(swarm *runtimev1alpha1.Swarm) corev1.Container {
 	port := GetCoordinatorPort(swarm)
 
 	return corev1.Container{
 		Name:  CoordinatorContainerName,
-		Image: CoordinatorImage,
+		Image: GetCoordinatorImage(swarm),
 		Ports: []corev1.ContainerPort{
 			{
 				Name:          "http",

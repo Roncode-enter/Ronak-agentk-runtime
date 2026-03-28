@@ -69,7 +69,11 @@ type AttestationResult struct {
 // It sends a nonce challenge to the attestation service, receives a signed quote,
 // and verifies the ECDSA P-256 signature. Only returns Verified=true if the
 // cryptographic verification passes.
-func VerifyAttestation(endpoint string, agentName string, namespace string) (*AttestationResult, error) {
+//
+// If trustedPublicKeyPEM is non-empty, the signature is verified against this pre-configured
+// root-of-trust key instead of the key from the attestation response. This prevents
+// self-signed attestation attacks where a compromised service provides its own key.
+func VerifyAttestation(endpoint string, agentName string, namespace string, trustedPublicKeyPEM ...string) (*AttestationResult, error) {
 	if endpoint == "" {
 		return &AttestationResult{
 			Verified:     false,
@@ -126,8 +130,20 @@ func VerifyAttestation(endpoint string, agentName string, namespace string) (*At
 		}, nil
 	}
 
-	// Verify the ECDSA signature on the quote
-	pubKey, err := parsePublicKey(attestResp.PublicKey)
+	// Determine which public key to use for verification.
+	// If a trusted root-of-trust key is provided, use it instead of the response key.
+	// This prevents self-signed attestation attacks.
+	pubKeyPEM := attestResp.PublicKey
+	if len(trustedPublicKeyPEM) > 0 && trustedPublicKeyPEM[0] != "" {
+		pubKeyPEM = trustedPublicKeyPEM[0]
+	} else if attestResp.PublicKey != "" {
+		// WARNING: Using public key from attestation response (self-signed).
+		// In production, always configure AttestationPublicKeySecretRef to provide
+		// a pre-configured root-of-trust key.
+		_ = pubKeyPEM // suppress lint; kept for clarity
+	}
+
+	pubKey, err := parsePublicKey(pubKeyPEM)
 	if err != nil {
 		return &AttestationResult{
 			Verified:     false,
