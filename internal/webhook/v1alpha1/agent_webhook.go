@@ -20,7 +20,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
-	"path/filepath"
+	"path"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation/field"
@@ -351,8 +351,8 @@ func (v *AgentCustomValidator) validateVolumeMounts(agent *runtimev1alpha1.Agent
 				continue // Skip if empty (K8s will validate)
 			}
 
-			path1 := filepath.Clean(volumeMount.MountPath)
-			path2 := filepath.Clean(agent.Spec.VolumeMounts[j].MountPath)
+			path1 := path.Clean(volumeMount.MountPath)
+			path2 := path.Clean(agent.Spec.VolumeMounts[j].MountPath)
 
 			// Skip exact duplicates (K8s validates duplicate mount paths)
 			if path1 == path2 {
