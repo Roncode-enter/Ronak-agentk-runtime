@@ -303,6 +303,10 @@ func main() {
 			setupLog.Error(err, "unable to create webhook", "webhook", "ToolServer")
 			os.Exit(1)
 		}
+		if err := webhookv1alpha1.SetupSwarmWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Swarm")
+			os.Exit(1)
+		}
 
 		if err := mgr.AddReadyzCheck("webhook", webhookServer.StartedChecker()); err != nil {
 			setupLog.Error(err, "unable to set up webhook ready check")

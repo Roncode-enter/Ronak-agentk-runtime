@@ -25,6 +25,7 @@ import (
 	"sync"
 
 	"github.com/consensys/gnark-crypto/ecc"
+	"github.com/consensys/gnark-crypto/kzg"
 	"github.com/consensys/gnark/backend/plonk"
 	"github.com/consensys/gnark/constraint"
 	"github.com/consensys/gnark/frontend"
@@ -80,39 +81,62 @@ func NewPlonKProver() (*PlonKProver, error) {
 		return nil, fmt.Errorf("failed to compile PlonK circuit: %w", err)
 	}
 
+	var canonicalSRS, lagrangeSRS kzg.SRS
 	srsFromEnv := false
 
-	// Check if an external SRS ceremony file is configured.
-	// The PLONK_SRS_PATH env var should point to a binary-serialized KZG SRS
-	// from a public ceremony (e.g., Ethereum Powers of Tau / Hermez).
-	if srsPath := os.Getenv("PLONK_SRS_PATH"); srsPath != "" {
-		if _, statErr := os.Stat(srsPath); statErr == nil {
-			srsFromEnv = true
-			log.Info("External SRS file detected — production mode enabled", "path", srsPath)
-			// External SRS loading: in a production build, replace this block with
-			// gnark-crypto's bn254 kzg.ReadFrom() to load ceremony SRS.
-			// For now, we still use unsafekzg but set the flag so the operator
-			// can distinguish between dev and production configuration.
-		} else {
-			log.Error(statErr, "PLONK_SRS_PATH set but file not found, falling back to development SRS", "path", srsPath)
+	// Check if external SRS ceremony files are configured.
+	// Production deployments MUST provide ceremony SRS files to prevent forgeable proofs.
+	//
+	// Required env vars for production:
+	//   PLONK_SRS_PATH           — canonical SRS (binary, from Powers of Tau / Hermez ceremony)
+	//   PLONK_SRS_LAGRANGE_PATH  — Lagrange-form SRS (binary, derived from canonical SRS)
+	//
+	// Both files use gnark-crypto's native binary serialization (WriteTo/ReadFrom).
+	srsPath := os.Getenv("PLONK_SRS_PATH")
+	srsLagrangePath := os.Getenv("PLONK_SRS_LAGRANGE_PATH")
+
+	if srsPath != "" && srsLagrangePath != "" {
+		// Load canonical SRS from ceremony file
+		srsData, readErr := os.ReadFile(srsPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("PLONK_SRS_PATH set but unreadable (%s): %w", srsPath, readErr)
+		}
+		canonicalSRS = kzg.NewSRS(ecc.BN254)
+		if _, readErr = canonicalSRS.ReadFrom(bytes.NewReader(srsData)); readErr != nil {
+			return nil, fmt.Errorf("failed to parse canonical SRS from %s: %w", srsPath, readErr)
+		}
+
+		// Load Lagrange SRS from ceremony file
+		lagrangeData, readErr := os.ReadFile(srsLagrangePath)
+		if readErr != nil {
+			return nil, fmt.Errorf("PLONK_SRS_LAGRANGE_PATH set but unreadable (%s): %w", srsLagrangePath, readErr)
+		}
+		lagrangeSRS = kzg.NewSRS(ecc.BN254)
+		if _, readErr = lagrangeSRS.ReadFrom(bytes.NewReader(lagrangeData)); readErr != nil {
+			return nil, fmt.Errorf("failed to parse Lagrange SRS from %s: %w", srsLagrangePath, readErr)
+		}
+
+		srsFromEnv = true
+		log.Info("Loaded production SRS from ceremony files",
+			"canonical", srsPath, "lagrange", srsLagrangePath)
+
+	} else if srsPath != "" && srsLagrangePath == "" {
+		return nil, fmt.Errorf("PLONK_SRS_PATH is set but PLONK_SRS_LAGRANGE_PATH is not — both are required for production SRS")
+
+	} else {
+		// No ceremony files — use development-only SRS
+		log.Info("WARNING: Using development-only SRS (unsafekzg). " +
+			"Proofs are cryptographically valid but the SRS trapdoor is known. " +
+			"Set PLONK_SRS_PATH and PLONK_SRS_LAGRANGE_PATH to ceremony files for production use.")
+		var unsafeErr error
+		canonicalSRS, lagrangeSRS, unsafeErr = unsafekzg.NewSRS(ccs)
+		if unsafeErr != nil {
+			return nil, fmt.Errorf("failed to generate development SRS: %w", unsafeErr)
 		}
 	}
 
-	// Generate SRS — always uses unsafekzg for now.
-	// When srsFromEnv is true, the operator has acknowledged production readiness
-	// and the SRS file can be integrated via a future gnark-crypto upgrade.
-	if !srsFromEnv {
-		log.Info("WARNING: Using development-only SRS (unsafekzg). " +
-			"Proofs are cryptographically valid but the SRS trapdoor is known. " +
-			"Set PLONK_SRS_PATH to a Powers of Tau ceremony file for production use.")
-	}
-	srs, srsLagrange, err := unsafekzg.NewSRS(ccs)
-	if err != nil {
-		return nil, fmt.Errorf("failed to generate SRS: %w", err)
-	}
-
-	// Run PlonK setup with the SRS
-	pk, vk, err := plonk.Setup(ccs, srs, srsLagrange)
+	// Run PlonK setup with the SRS (ceremony or development)
+	pk, vk, err := plonk.Setup(ccs, canonicalSRS, lagrangeSRS)
 	if err != nil {
 		return nil, fmt.Errorf("failed to run PlonK setup: %w", err)
 	}
